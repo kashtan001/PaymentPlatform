@@ -67,11 +67,14 @@ WAITING_MANAGER = 3
 WAITING_LINK_AMOUNT = 4
 WAITING_LINK_LABEL = 5
 WAITING_LINK_COMMENT = 6
+WAITING_REQUISITES_HISTORY = 7
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "telegram-dream-team")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "12345qwert!@#$%QWERT")
 SESSION_COOKIE_NAME = "payment_admin_session"
 SESSION_TTL_HOURS = 12
+DEFAULT_ADMIN_PANEL_URL = "https://paymentplatform-production-8de8.up.railway.app/admin"
+ADMIN_PANEL_URL = os.getenv("ADMIN_PANEL_URL", DEFAULT_ADMIN_PANEL_URL).strip() or DEFAULT_ADMIN_PANEL_URL
 
 ADMIN_SESSIONS: dict[str, datetime] = {}
 GEO_CACHE: dict[str, dict[str, Any]] = {}
@@ -283,6 +286,11 @@ def build_payment_link(amount: float, geo_code: str, label: str = "", comment: s
     return f"{WEB_URL}/?{urlencode(params)}"
 
 
+def build_admin_panel_link() -> str:
+    separator = "&" if "?" in ADMIN_PANEL_URL else "?"
+    return f"{ADMIN_PANEL_URL}{separator}autologin=1"
+
+
 def resolve_geo_code(requested_geo: str | None, country_code: str | None, browser_language: str | None) -> str:
     explicit_geo = sanitize_geo_code(requested_geo)
     if explicit_geo:
@@ -383,6 +391,15 @@ def init_db() -> None:
             full_name TEXT,
             added_at TEXT,
             added_by INTEGER
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bot_admin_preferences (
+            user_id INTEGER PRIMARY KEY,
+            selected_geo TEXT,
+            updated_at TEXT
         )
         """
     )
@@ -562,6 +579,23 @@ def list_geo_requisites_history(limit: int = 40) -> list[dict[str, Any]]:
         LIMIT ?
         """,
         (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def list_geo_requisites_history_for_geo(geo_code: str, limit: int = 8) -> list[dict[str, Any]]:
+    safe_geo = sanitize_geo_code(geo_code) or "ES"
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT id, geo_code, bank_name, card_number, receiver_name, created_at
+        FROM geo_requisites
+        WHERE geo_code = ?
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (safe_geo, limit),
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
@@ -847,6 +881,72 @@ def remove_bot_admin(target_user_id: int) -> tuple[bool, str]:
     return True, "Администратор удален."
 
 
+def get_bot_admin_selected_geo(user_id: int | None) -> str | None:
+    if user_id is None:
+        return None
+    conn = get_connection()
+    row = conn.execute(
+        """
+        SELECT selected_geo
+        FROM bot_admin_preferences
+        WHERE user_id = ?
+        LIMIT 1
+        """,
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return sanitize_geo_code(row["selected_geo"])
+
+
+def set_bot_admin_selected_geo(user_id: int | None, geo_code: str) -> None:
+    safe_geo = sanitize_geo_code(geo_code)
+    if user_id is None or not safe_geo:
+        return
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO bot_admin_preferences (user_id, selected_geo, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            selected_geo = excluded.selected_geo,
+            updated_at = excluded.updated_at
+        """,
+        (user_id, safe_geo, utc_now_iso()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def restore_geo_requisites_from_history(geo_code: str, history_id: int) -> dict[str, Any]:
+    safe_geo = sanitize_geo_code(geo_code) or "ES"
+    conn = get_connection()
+    row = conn.execute(
+        """
+        SELECT bank_name, card_number, receiver_name
+        FROM geo_requisites
+        WHERE id = ? AND geo_code = ?
+        LIMIT 1
+        """,
+        (history_id, safe_geo),
+    ).fetchone()
+    if row is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Реквизиты с таким ID для выбранного GEO не найдены")
+
+    conn.execute(
+        """
+        INSERT INTO geo_requisites (geo_code, bank_name, card_number, receiver_name, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (safe_geo, row["bank_name"], row["card_number"], row["receiver_name"], utc_now_iso()),
+    )
+    conn.commit()
+    conn.close()
+    return get_active_requisites(safe_geo)
+
+
 def parse_admin_ids_from_args(args: list[str]) -> list[int]:
     if not args:
         return []
@@ -1103,8 +1203,14 @@ def get_bot_status() -> dict[str, Any]:
     }
 
 
-def get_selected_geo(context: ContextTypes.DEFAULT_TYPE) -> str:
-    selected_geo = sanitize_geo_code(str(context.user_data.get("selected_geo", "ES")))
+def get_selected_geo(context: ContextTypes.DEFAULT_TYPE, user_id: int | None = None) -> str:
+    selected_geo = sanitize_geo_code(str(context.user_data.get("selected_geo", "")))
+    if not selected_geo:
+        selected_geo = get_bot_admin_selected_geo(user_id)
+    if selected_geo:
+        context.user_data["selected_geo"] = selected_geo
+        return selected_geo
+    selected_geo = sanitize_geo_code("ES")
     return selected_geo or "ES"
 
 
@@ -1112,9 +1218,9 @@ def main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
             ["🗺 Выбрать GEO", "📊 GEO статус"],
-            ["📝 Реквизиты", "👤 Менеджер"],
-            ["👥 Админы"],
-            ["🔗 Ссылка на оплату"],
+            ["📝 Реквизиты", "🗂 История реквизитов"],
+            ["👤 Менеджер", "👥 Админы"],
+            ["🔗 Ссылка на оплату", "🛠 Админка"],
         ],
         resize_keyboard=True,
     )
@@ -1169,6 +1275,27 @@ def build_admins_text() -> str:
     return "\n".join(lines)
 
 
+def build_requisites_history_text(geo_code: str) -> str:
+    items = list_geo_requisites_history_for_geo(geo_code)
+    if not items:
+        return (
+            f"История реквизитов для {geo_code} пока пуста.\n\n"
+            "Сначала сохраните хотя бы один комплект реквизитов."
+        )
+
+    lines = [
+        f"История реквизитов для {geo_code}:",
+        "Отправьте ID записи, чтобы снова сделать эти реквизиты активными.",
+        "",
+    ]
+    for item in items:
+        lines.append(
+            f"ID {item['id']} | {item['bank_name']} | {item['card_number']} | "
+            f"{item['receiver_name']} | {item['created_at']}"
+        )
+    return "\n".join(lines)
+
+
 async def admin_check(update: Update) -> bool:
     message = update.effective_message
     if message is None:
@@ -1186,7 +1313,8 @@ async def admin_check(update: Update) -> bool:
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await admin_check(update):
         return
-    selected_geo = get_selected_geo(context)
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
     await update.effective_message.reply_text(
         "Внутренняя панель команды активна.\n\n"
         f"Текущий выбранный GEO: {selected_geo}\n\n"
@@ -1205,6 +1333,16 @@ async def show_admins_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not await admin_check(update):
         return
     await update.effective_message.reply_text(build_admins_text(), reply_markup=main_keyboard())
+
+
+async def show_admin_panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await admin_check(update):
+        return
+    await update.effective_message.reply_text(
+        "Быстрый вход в веб-админку:\n"
+        f"{build_admin_panel_link()}",
+        reply_markup=main_keyboard(),
+    )
 
 
 async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1282,7 +1420,8 @@ async def remove_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def select_geo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await admin_check(update):
         return ConversationHandler.END
-    selected_geo = get_selected_geo(context)
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
     await update.effective_message.reply_text(
         f"Текущий GEO: {selected_geo}\nВыберите новый GEO.",
         reply_markup=geo_picker_keyboard(),
@@ -1297,6 +1436,7 @@ async def select_geo_save(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return WAITING_GEO_SELECTION
 
     context.user_data["selected_geo"] = geo_code
+    set_bot_admin_selected_geo(update.effective_user.id if update.effective_user else None, geo_code)
     await update.effective_message.reply_text(
         f"GEO переключен на {geo_code}.\n\n{build_geo_details_text(geo_code)}",
         reply_markup=main_keyboard(),
@@ -1307,7 +1447,8 @@ async def select_geo_save(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def change_reqs_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await admin_check(update):
         return ConversationHandler.END
-    selected_geo = get_selected_geo(context)
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
     requisites = get_active_requisites(selected_geo)
     await update.effective_message.reply_text(
         f"Текущий GEO: {selected_geo}\n"
@@ -1328,7 +1469,8 @@ async def change_reqs_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.effective_message.reply_text("Нужно 3 строки: банк, карта/счет и получатель.")
         return WAITING_REQUISITES
 
-    selected_geo = get_selected_geo(context)
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
     update_geo_requisites(selected_geo, lines[0], lines[1], lines[2])
     await update.effective_message.reply_text(
         f"Реквизиты для {selected_geo} обновлены.\n\n{build_geo_details_text(selected_geo)}",
@@ -1337,10 +1479,46 @@ async def change_reqs_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return ConversationHandler.END
 
 
+async def show_requisites_history_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await admin_check(update):
+        return ConversationHandler.END
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
+    await update.effective_message.reply_text(
+        f"{build_requisites_history_text(selected_geo)}\n\n"
+        "Для отмены отправьте /cancel",
+        reply_markup=main_keyboard(),
+    )
+    return WAITING_REQUISITES_HISTORY
+
+
+async def show_requisites_history_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    history_id = parse_optional_int(update.effective_message.text)
+    if history_id is None or history_id <= 0:
+        await update.effective_message.reply_text("Нужен числовой ID записи из истории.")
+        return WAITING_REQUISITES_HISTORY
+
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
+    try:
+        restore_geo_requisites_from_history(selected_geo, history_id)
+    except HTTPException as exc:
+        await update.effective_message.reply_text(str(exc.detail))
+        return WAITING_REQUISITES_HISTORY
+
+    await update.effective_message.reply_text(
+        f"Реквизиты из истории ID {history_id} снова активны для {selected_geo}.\n\n"
+        f"{build_geo_details_text(selected_geo)}",
+        reply_markup=main_keyboard(),
+    )
+    return ConversationHandler.END
+
+
 async def change_manager_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await admin_check(update):
         return ConversationHandler.END
-    selected_geo = get_selected_geo(context)
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
     profile = get_geo_profile(selected_geo)
     await update.effective_message.reply_text(
         f"Текущий GEO: {selected_geo}\n"
@@ -1361,7 +1539,8 @@ async def change_manager_save(update: Update, context: ContextTypes.DEFAULT_TYPE
         return WAITING_MANAGER
 
     manager_link = normalize_manager_link("" if lines[1] == "-" else lines[1])
-    selected_geo = get_selected_geo(context)
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
     update_geo_manager(selected_geo, lines[0], manager_link)
     await update.effective_message.reply_text(
         f"Менеджер для {selected_geo} обновлен.\n\n{build_geo_details_text(selected_geo)}",
@@ -1373,7 +1552,8 @@ async def change_manager_save(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def create_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await admin_check(update):
         return ConversationHandler.END
-    selected_geo = get_selected_geo(context)
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
     await update.effective_message.reply_text(
         f"Текущий GEO: {selected_geo}\nВведите сумму к оплате, например: 250"
     )
@@ -1411,7 +1591,8 @@ async def create_link_label(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     amount = float(context.user_data.get("temp_amount", 0))
-    selected_geo = get_selected_geo(context)
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
     clean_label = str(context.user_data.get("temp_label", ""))
     comment = update.effective_message.text.strip()
     clean_comment = "" if comment == "-" else clean_payment_comment(comment)
@@ -1446,6 +1627,18 @@ if bot_app is not None:
         states={WAITING_REQUISITES: [MessageHandler(filters.TEXT & ~filters.COMMAND, change_reqs_save)]},
         fallbacks=[CommandHandler("cancel", cancel_cmd)],
     )
+    conv_handler_req_history = ConversationHandler(
+        entry_points=[
+            CommandHandler("reqhistory", show_requisites_history_start),
+            MessageHandler(filters.Regex("^🗂 История реквизитов$"), show_requisites_history_start),
+        ],
+        states={
+            WAITING_REQUISITES_HISTORY: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, show_requisites_history_save)
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_cmd)],
+    )
     conv_handler_manager = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^👤 Менеджер$"), change_manager_start)],
         states={WAITING_MANAGER: [MessageHandler(filters.TEXT & ~filters.COMMAND, change_manager_save)]},
@@ -1465,10 +1658,13 @@ if bot_app is not None:
     bot_app.add_handler(CommandHandler("admins", show_admins_cmd))
     bot_app.add_handler(CommandHandler("addadmin", add_admin_cmd))
     bot_app.add_handler(CommandHandler("removeadmin", remove_admin_cmd))
+    bot_app.add_handler(CommandHandler("adminpanel", show_admin_panel_cmd))
     bot_app.add_handler(MessageHandler(filters.Regex("^📊 GEO статус$"), show_geo_status_cmd))
     bot_app.add_handler(MessageHandler(filters.Regex("^👥 Админы$"), show_admins_cmd))
+    bot_app.add_handler(MessageHandler(filters.Regex("^🛠 Админка$"), show_admin_panel_cmd))
     bot_app.add_handler(conv_handler_geo)
     bot_app.add_handler(conv_handler_req)
+    bot_app.add_handler(conv_handler_req_history)
     bot_app.add_handler(conv_handler_manager)
     bot_app.add_handler(conv_handler_link)
 

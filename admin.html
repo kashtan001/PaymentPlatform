@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dream Team Admin</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ["Manrope", "sans-serif"],
+                        mono: ["IBM Plex Mono", "monospace"]
+                    },
+                    boxShadow: {
+                        panel: "0 18px 60px rgba(0, 0, 0, 0.35)"
+                    }
+                }
+            }
+        };
+    </script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"></script>
+    <style>
+        [x-cloak] {
+            display: none !important;
+        }
+
+        body {
+            background:
+                radial-gradient(circle at top left, rgba(10, 85, 61, 0.32), transparent 22%),
+                radial-gradient(circle at right top, rgba(83, 65, 35, 0.26), transparent 20%),
+                linear-gradient(180deg, #0f1115 0%, #131720 100%);
+        }
+
+        .panel {
+            background: rgba(21, 26, 36, 0.76);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(18px);
+        }
+
+        .input-shell {
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.04);
+        }
+    </style>
+</head>
+<body x-data="adminApp()" x-init="init()" class="font-sans text-white">
+    <div class="mx-auto min-h-screen max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
+        <div x-show="checkingSession" x-cloak class="panel rounded-[2rem] px-6 py-16 text-center shadow-panel">
+            <p class="text-sm uppercase tracking-[0.3em] text-zinc-400">Loading admin</p>
+        </div>
+
+        <section x-show="!checkingSession && !authenticated" x-cloak class="mx-auto max-w-md">
+            <div class="panel rounded-[2rem] p-6 shadow-panel sm:p-8">
+                <div class="mb-8 flex items-center gap-3">
+                    <div class="flex h-12 w-12 items-center justify-center rounded-full bg-white font-semibold text-black">D</div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Dream Team</p>
+                        <h1 class="text-2xl font-semibold text-white">Admin</h1>
+                    </div>
+                </div>
+
+                <form class="space-y-4" @submit.prevent="login">
+                    <label class="block">
+                        <span class="mb-2 block text-sm text-zinc-400">Логин</span>
+                        <input type="text" x-model="loginForm.username" class="input-shell w-full rounded-2xl px-4 py-4 text-white outline-none" placeholder="telegram-dream-team">
+                    </label>
+                    <label class="block">
+                        <span class="mb-2 block text-sm text-zinc-400">Пароль</span>
+                        <input type="password" x-model="loginForm.password" class="input-shell w-full rounded-2xl px-4 py-4 text-white outline-none" placeholder="••••••••••••">
+                    </label>
+
+                    <div x-show="loginError" x-cloak class="rounded-2xl bg-red-500/10 px-4 py-4 text-sm text-red-300" x-text="loginError"></div>
+
+                    <div class="rounded-2xl bg-white/5 px-4 py-4 text-sm text-zinc-300">
+                        <p x-show="isLocalAccessMode()" x-cloak>
+                            Локальный вход: логин <span class="font-mono">telegram-dream-team</span>, пароль <span class="font-mono">12345qwert!@#$%QWERT</span>.
+                        </p>
+                        <p x-show="!isLocalAccessMode()" x-cloak>
+                            Для входа используются переменные окружения <span class="font-mono">ADMIN_USERNAME</span> и <span class="font-mono">ADMIN_PASSWORD</span>.
+                        </p>
+                        <div x-show="isLocalAccessMode()" x-cloak class="mt-3 flex flex-wrap gap-2">
+                            <button type="button" @click="fillLocalCredentials()" class="rounded-full border border-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white">
+                                Подставить локальные доступы
+                            </button>
+                        </div>
+                    </div>
+
+                    <button type="submit" :disabled="loggingIn" class="w-full rounded-full bg-white px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-black transition hover:-translate-y-0.5 disabled:opacity-60">
+                        <span x-text="loggingIn ? 'Входим...' : 'Войти'"></span>
+                    </button>
+                </form>
+            </div>
+        </section>
+
+        <section x-show="!checkingSession && authenticated" x-cloak class="space-y-5">
+            <header class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+                <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                        <div class="flex items-center gap-3">
+                            <div class="flex h-11 w-11 items-center justify-center rounded-full bg-white font-semibold text-black">D</div>
+                            <div>
+                                <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Dream Team</p>
+                                <h1 class="text-2xl font-semibold">Multi-geo control center</h1>
+                            </div>
+                        </div>
+                        <p class="mt-4 max-w-3xl text-sm text-zinc-400">
+                            Внутренняя панель для GEO-конфигов, актуальных реквизитов, Telegram-менеджеров и генерации клиентских ссылок без UUID, чеков и модерации.
+                        </p>
+                    </div>
+
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button @click="refreshDashboard()" class="rounded-full bg-white px-4 py-3 text-sm font-semibold text-black">Обновить</button>
+                        <button @click="toggleAutorefresh()" class="rounded-full border border-white/10 px-4 py-3 text-sm font-medium text-white">
+                            <span x-text="autoRefresh ? 'Автообновление: ВКЛ' : 'Автообновление: ВЫКЛ'"></span>
+                        </button>
+                        <button @click="logout()" class="rounded-full border border-white/10 px-4 py-3 text-sm font-medium text-white">Выйти</button>
+                    </div>
+                </div>
+            </header>
+
+            <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
+                <template x-for="card in statCards()" :key="card.label">
+                    <div class="panel rounded-[1.7rem] p-5 shadow-panel">
+                        <p class="text-xs uppercase tracking-[0.28em] text-zinc-500" x-text="card.label"></p>
+                        <p class="mt-4 text-3xl font-semibold" x-text="card.value"></p>
+                    </div>
+                </template>
+            </div>
+
+            <div class="grid gap-5 xl:grid-cols-2">
+                <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Telegram bot</p>
+                            <h2 class="mt-2 text-xl font-semibold">Статус внутренней панели</h2>
+                        </div>
+                        <div class="rounded-full px-3 py-2 text-xs font-semibold uppercase tracking-[0.24em]"
+                             :class="dashboard.bot?.control_panel_ready ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'">
+                            <span x-text="dashboard.bot?.control_panel_ready ? 'Online' : 'Offline'"></span>
+                        </div>
+                    </div>
+
+                    <div class="mt-5 grid gap-3 sm:grid-cols-2">
+                        <div class="rounded-[1.4rem] bg-white/5 p-4">
+                            <p class="text-sm text-zinc-400">Токен задан</p>
+                            <p class="mt-2 text-lg font-semibold" x-text="boolText(dashboard.bot?.enabled)"></p>
+                        </div>
+                        <div class="rounded-[1.4rem] bg-white/5 p-4">
+                            <p class="text-sm text-zinc-400">Админов бота</p>
+                            <p class="mt-2 text-lg font-semibold" x-text="dashboard.bot?.admin_count || 0"></p>
+                        </div>
+                        <div class="rounded-[1.4rem] bg-white/5 p-4">
+                            <p class="text-sm text-zinc-400">Runtime запущен</p>
+                            <p class="mt-2 text-lg font-semibold" x-text="boolText(dashboard.bot?.runtime_started)"></p>
+                        </div>
+                        <div class="rounded-[1.4rem] bg-white/5 p-4">
+                            <p class="text-sm text-zinc-400">Polling активен</p>
+                            <p class="mt-2 text-lg font-semibold" x-text="boolText(dashboard.bot?.updater_running)"></p>
+                        </div>
+                    </div>
+
+                    <div x-show="dashboard.bot?.error" x-cloak class="mt-4 rounded-[1.4rem] bg-red-500/10 px-4 py-4 text-sm text-red-300" x-text="dashboard.bot?.error"></div>
+                </section>
+
+                <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+                    <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Quick actions</p>
+                    <h2 class="mt-2 text-xl font-semibold">Генератор ссылки</h2>
+                    <form class="mt-5 space-y-4" @submit.prevent="buildLink">
+                        <div class="grid gap-4 sm:grid-cols-2">
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">GEO</span>
+                                <select x-model="linkForm.geo_code" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                    <template x-for="geo in geos()" :key="geo.profile.geo_code">
+                                        <option :value="geo.profile.geo_code" x-text="geo.profile.geo_code"></option>
+                                    </template>
+                                </select>
+                            </label>
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">Сумма</span>
+                                <input type="text" x-model="linkForm.amount" class="input-shell w-full rounded-2xl px-4 py-4 outline-none" placeholder="250">
+                            </label>
+                        </div>
+                        <label class="block">
+                            <span class="mb-2 block text-sm text-zinc-400">Назначение платежа</span>
+                            <input type="text" x-model="linkForm.label" class="input-shell w-full rounded-2xl px-4 py-4 outline-none" placeholder="service-payment">
+                        </label>
+                        <label class="block">
+                            <span class="mb-2 block text-sm text-zinc-400">Комментарий для лендинга</span>
+                            <textarea x-model="linkForm.comment" class="input-shell min-h-[110px] w-full rounded-2xl px-4 py-4 outline-none" placeholder="Important payment note"></textarea>
+                        </label>
+                        <div x-show="linkMessage" x-cloak class="rounded-2xl bg-white/5 px-4 py-4 text-sm text-zinc-300 break-all" x-text="linkMessage"></div>
+                        <div class="flex flex-wrap gap-2">
+                            <button type="submit" class="rounded-full bg-white px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-black">Собрать</button>
+                            <button type="button" @click="copyText(linkMessage)" class="rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Копировать</button>
+                            <button type="button" @click="openLink(linkMessage)" class="rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Открыть</button>
+                        </div>
+                    </form>
+                </section>
+            </div>
+
+            <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+                <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Geo snapshots</p>
+                        <h2 class="mt-2 text-xl font-semibold">Активные конфигурации по GEO</h2>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <template x-for="geo in geos()" :key="geo.profile.geo_code">
+                            <button type="button" @click="selectGeo(geo.profile.geo_code)"
+                                    class="rounded-full px-4 py-3 text-sm font-semibold transition"
+                                    :class="editingGeoCode === geo.profile.geo_code ? 'bg-white text-black' : 'border border-white/10 text-white'">
+                                <span x-text="geo.profile.geo_code"></span>
+                            </button>
+                        </template>
+                    </div>
+                </div>
+
+                <div class="mt-5 grid gap-4 lg:grid-cols-4">
+                    <template x-for="geo in geos()" :key="geo.profile.geo_code">
+                        <button type="button" @click="selectGeo(geo.profile.geo_code)" class="rounded-[1.6rem] bg-white/5 p-4 text-left transition hover:bg-white/10">
+                            <div class="flex items-center justify-between gap-3">
+                                <div>
+                                    <p class="text-xs uppercase tracking-[0.24em] text-zinc-500" x-text="geo.profile.geo_code"></p>
+                                    <h3 class="mt-2 text-lg font-semibold" x-text="geo.profile.geo_name"></h3>
+                                </div>
+                                <div class="rounded-full bg-white/5 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-zinc-300" x-text="geo.profile.default_language"></div>
+                            </div>
+                            <div class="mt-4 space-y-2 text-sm text-zinc-300">
+                                <p><span class="text-zinc-500">Банк:</span> <span x-text="geo.active_requisites.bank_name"></span></p>
+                                <p><span class="text-zinc-500">Счёт:</span> <span class="font-mono text-xs" x-text="geo.active_requisites.card_number"></span></p>
+                                <p><span class="text-zinc-500">Менеджер:</span> <span x-text="geo.profile.manager_name"></span></p>
+                                <p><span class="text-zinc-500">Таймер:</span> <span x-text="`${geo.profile.refresh_minutes} мин`"></span></p>
+                            </div>
+                        </button>
+                    </template>
+                </div>
+            </section>
+
+            <div class="grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
+                <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Editor</p>
+                            <h2 class="mt-2 text-xl font-semibold">Редактор GEO</h2>
+                        </div>
+                        <div class="rounded-full bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-zinc-300" x-text="editingGeoCode"></div>
+                    </div>
+
+                    <form class="mt-5 space-y-4" @submit.prevent="saveGeo">
+                        <div class="grid gap-4 sm:grid-cols-2">
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">Название GEO</span>
+                                <input type="text" x-model="geoForm.geo_name" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                            </label>
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">Язык по умолчанию</span>
+                                <select x-model="geoForm.default_language" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                    <template x-for="language in languageOptions()" :key="language.code">
+                                        <option :value="language.code" x-text="`${language.label} (${language.code})`"></option>
+                                    </template>
+                                </select>
+                            </label>
+                        </div>
+
+                        <div class="grid gap-4 sm:grid-cols-2">
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">Имя менеджера</span>
+                                <input type="text" x-model="geoForm.manager_name" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                            </label>
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">Telegram-ссылка менеджера</span>
+                                <input type="text" x-model="geoForm.manager_telegram_url" class="input-shell w-full rounded-2xl px-4 py-4 outline-none" placeholder="https://t.me/manager_name">
+                            </label>
+                        </div>
+
+                        <label class="block">
+                            <span class="mb-2 block text-sm text-zinc-400">Таймер автообновления, минут</span>
+                            <input type="number" min="1" max="120" x-model="geoForm.refresh_minutes" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                        </label>
+
+                        <div class="grid gap-4 sm:grid-cols-3">
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">Банк</span>
+                                <input type="text" x-model="geoForm.bank_name" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                            </label>
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">Карта / счёт</span>
+                                <input type="text" x-model="geoForm.card_number" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                            </label>
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">Получатель</span>
+                                <input type="text" x-model="geoForm.receiver_name" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                            </label>
+                        </div>
+
+                        <div x-show="geoMessage" x-cloak class="rounded-2xl bg-white/5 px-4 py-4 text-sm text-zinc-300" x-text="geoMessage"></div>
+
+                        <button type="submit" class="w-full rounded-full bg-white px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-black">
+                            Сохранить GEO
+                        </button>
+                    </form>
+                </section>
+
+                <div class="space-y-5">
+                    <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+                        <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Traffic intelligence</p>
+                        <h2 class="mt-2 text-xl font-semibold">Гео и языки</h2>
+
+                        <div class="mt-5 space-y-4">
+                            <div>
+                                <p class="mb-3 text-sm text-zinc-400">Топ стран</p>
+                                <div class="flex flex-wrap gap-2">
+                                    <template x-for="item in dashboard.stats?.top_countries || []" :key="item.label">
+                                        <span class="rounded-full bg-white/5 px-3 py-2 text-sm" x-text="`${item.label}: ${item.count}`"></span>
+                                    </template>
+                                </div>
+                            </div>
+
+                            <div>
+                                <p class="mb-3 text-sm text-zinc-400">Топ GEO</p>
+                                <div class="flex flex-wrap gap-2">
+                                    <template x-for="item in dashboard.stats?.top_geos || []" :key="item.label">
+                                        <span class="rounded-full bg-white/5 px-3 py-2 text-sm" x-text="`${item.label}: ${item.count}`"></span>
+                                    </template>
+                                </div>
+                            </div>
+
+                            <div>
+                                <p class="mb-3 text-sm text-zinc-400">Топ языков лендинга</p>
+                                <div class="flex flex-wrap gap-2">
+                                    <template x-for="item in dashboard.stats?.top_languages || []" :key="item.label">
+                                        <span class="rounded-full bg-white/5 px-3 py-2 text-sm" x-text="`${item.label}: ${item.count}`"></span>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+                        <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Selected GEO</p>
+                        <h2 class="mt-2 text-xl font-semibold">Текущий профиль</h2>
+
+                        <div x-show="currentGeoSnapshot()" x-cloak class="mt-5 rounded-[1.6rem] bg-white/5 p-4">
+                            <template x-if="currentGeoSnapshot()">
+                                <div>
+                                    <div class="flex items-center justify-between gap-3">
+                                        <div>
+                                            <p class="text-xs uppercase tracking-[0.24em] text-zinc-500" x-text="currentGeoSnapshot().profile.geo_code"></p>
+                                            <h3 class="mt-2 text-lg font-semibold" x-text="currentGeoSnapshot().profile.geo_name"></h3>
+                                        </div>
+                                        <div class="rounded-full bg-white/5 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-zinc-300" x-text="currentGeoSnapshot().profile.default_language"></div>
+                                    </div>
+                                    <div class="mt-4 space-y-2 text-sm text-zinc-300">
+                                        <p><span class="text-zinc-500">Менеджер:</span> <span x-text="currentGeoSnapshot().profile.manager_name"></span></p>
+                                        <p><span class="text-zinc-500">Telegram:</span> <span x-text="currentGeoSnapshot().profile.manager_telegram_url || 'не задан'"></span></p>
+                                        <p><span class="text-zinc-500">Таймер:</span> <span x-text="`${currentGeoSnapshot().profile.refresh_minutes} мин`"></span></p>
+                                        <p><span class="text-zinc-500">Банк:</span> <span x-text="currentGeoSnapshot().active_requisites.bank_name"></span></p>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <div class="grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
+                <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+                    <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Visitor feed</p>
+                    <h2 class="mt-2 text-xl font-semibold">Последние посещения</h2>
+
+                    <div class="mt-5 space-y-3">
+                        <template x-for="visit in dashboard.visits || []" :key="visit.id">
+                            <div class="rounded-[1.4rem] bg-white/5 p-4">
+                                <div class="flex flex-wrap items-center justify-between gap-3">
+                                    <div class="font-mono text-xs text-zinc-300" x-text="visit.ip_address || 'unknown'"></div>
+                                    <div class="flex flex-wrap gap-2">
+                                        <span class="rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.24em]"
+                                              :class="visit.mode === 'live' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-white/8 text-zinc-300'"
+                                              x-text="visit.mode"></span>
+                                        <span class="rounded-full bg-white/8 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-zinc-300" x-text="visit.geo_code || 'UNKNOWN'"></span>
+                                    </div>
+                                </div>
+                                <div class="mt-3 text-sm text-zinc-300" x-text="visit.country_name || visit.country_code || 'Unknown region'"></div>
+                                <div class="mt-1 text-sm text-zinc-500" x-text="[visit.city, visit.region, visit.timezone].filter(Boolean).join(' • ') || 'No geo details'"></div>
+                                <div class="mt-3 text-sm text-zinc-300" x-show="visit.client_first_name || visit.client_last_name">
+                                    <span>Клиент:</span>
+                                    <span x-text="[visit.client_first_name, visit.client_last_name].filter(Boolean).join(' ')"></span>
+                                </div>
+                                <div class="mt-3 text-sm text-zinc-400" x-show="visit.payment_amount">
+                                    <span>Сумма:</span>
+                                    <span x-text="formatAmount(visit.payment_amount, 'EUR')"></span>
+                                    <span x-show="visit.payment_label"> • </span>
+                                    <span x-show="visit.payment_label" x-text="visit.payment_label"></span>
+                                </div>
+                                <div class="mt-3 text-sm text-zinc-400" x-show="visit.payment_comment">
+                                    <span class="text-zinc-500">Комментарий:</span>
+                                    <span x-text="visit.payment_comment"></span>
+                                </div>
+                                <div class="mt-3 rounded-[1rem] bg-white/5 p-3" x-show="visit.snapshot_bank_name || visit.snapshot_card_number || visit.snapshot_receiver_name">
+                                    <p class="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Реквизиты, показанные клиенту</p>
+                                    <div class="mt-3 space-y-2 text-sm text-zinc-300">
+                                        <p x-show="visit.snapshot_bank_name">
+                                            <span class="text-zinc-500">Банк:</span>
+                                            <span x-text="visit.snapshot_bank_name"></span>
+                                        </p>
+                                        <p x-show="visit.snapshot_card_number">
+                                            <span class="text-zinc-500">Карта / счёт:</span>
+                                            <span class="font-mono text-xs" x-text="visit.snapshot_card_number"></span>
+                                        </p>
+                                        <p x-show="visit.snapshot_receiver_name">
+                                            <span class="text-zinc-500">Получатель:</span>
+                                            <span x-text="visit.snapshot_receiver_name"></span>
+                                        </p>
+                                        <p x-show="visit.requisites_id">
+                                            <span class="text-zinc-500">ID снимка:</span>
+                                            <span x-text="visit.requisites_id"></span>
+                                        </p>
+                                    </div>
+                                </div>
+                                <div class="mt-3 text-xs text-zinc-500" x-text="visit.user_agent"></div>
+                                <div class="mt-3 text-xs text-zinc-500" x-text="formatDate(visit.created_at)"></div>
+                            </div>
+                        </template>
+                    </div>
+                </section>
+
+                <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+                    <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Requisites history</p>
+                    <h2 class="mt-2 text-xl font-semibold">История реквизитов</h2>
+                    <p class="mt-3 text-sm text-zinc-400">
+                        Старые рабочие реквизиты можно снова сделать активными одним нажатием, без ручного ввода.
+                    </p>
+
+                    <div class="mt-5 space-y-3">
+                        <template x-for="item in dashboard.requisites_history || []" :key="item.id">
+                            <div class="rounded-[1.4rem] bg-white/5 p-4">
+                                <div class="flex items-center justify-between gap-3">
+                                    <div>
+                                        <p class="text-xs uppercase tracking-[0.24em] text-zinc-500" x-text="item.geo_code"></p>
+                                        <div class="mt-2 text-sm font-semibold" x-text="item.bank_name"></div>
+                                    </div>
+                                    <div class="flex items-center gap-3">
+                                        <div class="text-xs text-zinc-500" x-text="formatDate(item.created_at)"></div>
+                                        <button type="button"
+                                                @click="applyHistoryItem(item)"
+                                                class="rounded-full border border-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-white hover:text-black">
+                                            Сделать активными
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="mt-2 font-mono text-xs text-zinc-300" x-text="item.card_number"></div>
+                                <div class="mt-2 text-sm text-zinc-400" x-text="item.receiver_name"></div>
+                                <div class="mt-2 text-xs text-zinc-500">ID снимка: <span x-text="item.id"></span></div>
+                            </div>
+                        </template>
+                    </div>
+                </section>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        const ADMIN_APP_BASE_URL = window.location.protocol.startsWith("http")
+            ? window.location.origin
+            : "http://127.0.0.1:8000";
+        const LOCAL_ADMIN_CREDENTIALS = {
+            username: "telegram-dream-team",
+            password: "12345qwert!@#$%QWERT"
+        };
+        const LOCAL_ACCESS_HOSTS = new Set(["127.0.0.1", "localhost"]);
+
+        function adminApp() {
+            return {
+                checkingSession: true,
+                authenticated: false,
+                loggingIn: false,
+                loginError: "",
+                dashboard: {},
+                autoRefresh: false,
+                refreshTimer: null,
+                editingGeoCode: "ES",
+                geoMessage: "",
+                linkMessage: "",
+                loginForm: {
+                    username: "",
+                    password: ""
+                },
+                linkForm: {
+                    geo_code: "ES",
+                    amount: "",
+                    label: "",
+                    comment: ""
+                },
+                geoForm: {
+                    geo_name: "",
+                    default_language: "es",
+                    manager_name: "",
+                    manager_telegram_url: "",
+                    refresh_minutes: 15,
+                    bank_name: "",
+                    card_number: "",
+                    receiver_name: ""
+                },
+
+                async init() {
+                    this.fillLocalCredentials();
+                    await this.checkSession();
+                    if (!this.authenticated && this.shouldAutoLogin()) {
+                        this.loginForm.username = LOCAL_ADMIN_CREDENTIALS.username;
+                        this.loginForm.password = LOCAL_ADMIN_CREDENTIALS.password;
+                        await this.login();
+                    }
+                    if (this.authenticated) {
+                        await this.refreshDashboard();
+                        this.startAutorefresh();
+                    }
+                    this.checkingSession = false;
+                },
+
+                isLocalAccessMode() {
+                    return window.location.protocol === "file:" || LOCAL_ACCESS_HOSTS.has(window.location.hostname);
+                },
+
+                fillLocalCredentials() {
+                    if (!this.isLocalAccessMode()) {
+                        return;
+                    }
+                    this.loginForm.username = LOCAL_ADMIN_CREDENTIALS.username;
+                    this.loginForm.password = LOCAL_ADMIN_CREDENTIALS.password;
+                },
+
+                shouldAutoLogin() {
+                    const params = new URLSearchParams(window.location.search);
+                    return params.get("autologin") === "1";
+                },
+
+                stripAutologinFlag() {
+                    if (!this.shouldAutoLogin()) {
+                        return;
+                    }
+                    const url = new URL(window.location.href);
+                    url.searchParams.delete("autologin");
+                    window.history.replaceState({}, "", url.toString());
+                },
+
+                geos() {
+                    return this.dashboard.geos || [];
+                },
+
+                languageOptions() {
+                    return this.dashboard.languages || [];
+                },
+
+                currentGeoSnapshot() {
+                    return this.geos().find((item) => item.profile.geo_code === this.editingGeoCode) || null;
+                },
+
+                selectGeo(code) {
+                    this.editingGeoCode = code;
+                    this.linkForm.geo_code = code;
+                    this.syncGeoForm();
+                },
+
+                syncGeoForm() {
+                    const current = this.currentGeoSnapshot();
+                    if (!current) {
+                        return;
+                    }
+                    this.geoForm = {
+                        geo_name: current.profile.geo_name || "",
+                        default_language: current.profile.default_language || "en",
+                        manager_name: current.profile.manager_name || "",
+                        manager_telegram_url: current.profile.manager_telegram_url || "",
+                        refresh_minutes: current.profile.refresh_minutes || 15,
+                        bank_name: current.active_requisites?.bank_name || "",
+                        card_number: current.active_requisites?.card_number || "",
+                        receiver_name: current.active_requisites?.receiver_name || ""
+                    };
+                },
+
+                async checkSession() {
+                    try {
+                        const response = await fetch(this.apiUrl("/api/admin/session"), { credentials: "include" });
+                        const data = await response.json();
+                        this.authenticated = Boolean(data.authenticated);
+                    } catch (error) {
+                        this.authenticated = false;
+                    }
+                },
+
+                async login() {
+                    this.loggingIn = true;
+                    this.loginError = "";
+                    try {
+                        const response = await fetch(this.apiUrl("/api/admin/login"), {
+                            method: "POST",
+                            credentials: "include",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(this.loginForm)
+                        });
+
+                        if (!response.ok) {
+                            const errorData = await response.json().catch(() => ({}));
+                            throw new Error(errorData.detail || "Ошибка входа");
+                        }
+
+                        this.authenticated = true;
+                        this.stripAutologinFlag();
+                        await this.refreshDashboard();
+                        this.startAutorefresh();
+                    } catch (error) {
+                        this.loginError = error.message || "Ошибка входа";
+                        if (error instanceof TypeError) {
+                            this.loginError = "Нет соединения с backend. Запусти сервер и открывай админку через /admin.";
+                        }
+                    } finally {
+                        this.loggingIn = false;
+                    }
+                },
+
+                async logout() {
+                    await fetch(this.apiUrl("/api/admin/logout"), { method: "POST", credentials: "include" });
+                    this.authenticated = false;
+                    this.dashboard = {};
+                    this.stopAutorefresh();
+                },
+
+                async refreshDashboard() {
+                    try {
+                        const response = await fetch(this.apiUrl("/api/admin/dashboard"), { credentials: "include" });
+                        if (!response.ok) {
+                            if (response.status === 401) {
+                                this.authenticated = false;
+                                this.stopAutorefresh();
+                                return;
+                            }
+                            throw new Error("Dashboard unavailable");
+                        }
+
+                        const data = await response.json();
+                        this.dashboard = data;
+                        if (!this.currentGeoSnapshot() && this.geos().length) {
+                            this.editingGeoCode = this.geos()[0].profile.geo_code;
+                        }
+                        if (!this.linkForm.geo_code && this.geos().length) {
+                            this.linkForm.geo_code = this.geos()[0].profile.geo_code;
+                        }
+                        this.syncGeoForm();
+                    } catch (error) {
+                        console.error(error);
+                    }
+                },
+
+                startAutorefresh() {
+                    this.stopAutorefresh();
+                    if (!this.autoRefresh) {
+                        return;
+                    }
+                    this.refreshTimer = setInterval(() => {
+                        this.refreshDashboard();
+                    }, 10000);
+                },
+
+                stopAutorefresh() {
+                    if (this.refreshTimer) {
+                        clearInterval(this.refreshTimer);
+                        this.refreshTimer = null;
+                    }
+                },
+
+                toggleAutorefresh() {
+                    this.autoRefresh = !this.autoRefresh;
+                    if (this.autoRefresh) {
+                        this.startAutorefresh();
+                    } else {
+                        this.stopAutorefresh();
+                    }
+                },
+
+                async saveGeo(successMessage = null) {
+                    this.geoMessage = "";
+                    try {
+                        const response = await fetch(this.apiUrl(`/api/admin/geos/${this.editingGeoCode}`), {
+                            method: "POST",
+                            credentials: "include",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(this.geoForm)
+                        });
+                        const data = await response.json();
+                        if (!response.ok) {
+                            throw new Error(data.detail || "Не удалось сохранить GEO");
+                        }
+                        this.geoMessage = successMessage || `GEO ${this.editingGeoCode} обновлён`;
+                        await this.refreshDashboard();
+                    } catch (error) {
+                        this.geoMessage = error.message || "Не удалось сохранить GEO";
+                    }
+                },
+
+                async applyHistoryItem(item) {
+                    if (!item || !item.geo_code) {
+                        return;
+                    }
+                    this.selectGeo(item.geo_code);
+                    this.geoForm.bank_name = item.bank_name || "";
+                    this.geoForm.card_number = item.card_number || "";
+                    this.geoForm.receiver_name = item.receiver_name || "";
+                    await this.saveGeo(`Реквизиты из истории ID ${item.id} снова активны для ${item.geo_code}`);
+                },
+
+                buildLink() {
+                    const amount = Number(String(this.linkForm.amount).replace(",", "."));
+                    if (!Number.isFinite(amount) || amount <= 0) {
+                        this.linkMessage = "Укажите корректную сумму";
+                        return;
+                    }
+
+                    const rawLabel = String(this.linkForm.label || "").trim();
+                    if (rawLabel && !/^[A-Za-z0-9 _-]+$/.test(rawLabel)) {
+                        this.linkMessage = "Назначение платежа: только latin, цифры, пробел и дефис";
+                        return;
+                    }
+                    const rawComment = String(this.linkForm.comment || "").trim();
+
+                    const url = new URL(this.dashboard.web_url || window.location.origin);
+                    url.searchParams.set("payment", this.formatQueryAmount(amount));
+                    url.searchParams.set("geo", this.linkForm.geo_code || this.editingGeoCode);
+                    const currentGeo = this.geos().find((item) => item.profile.geo_code === (this.linkForm.geo_code || this.editingGeoCode));
+                    const lang = currentGeo?.profile?.default_language || "en";
+                    url.searchParams.set("lang", lang);
+                    if (rawLabel) {
+                        url.searchParams.set("label", rawLabel.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/-{2,}/g, "-").replace(/^-|-$/g, ""));
+                    }
+                    if (rawComment) {
+                        url.searchParams.set("comment", rawComment);
+                    }
+                    this.linkMessage = url.toString();
+                },
+
+                formatQueryAmount(amount) {
+                    return Number(amount).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+                },
+
+                statCards() {
+                    const stats = this.dashboard.stats || {};
+                    return [
+                        { label: "Визиты всего", value: stats.visits_total || 0 },
+                        { label: "Визиты сегодня", value: stats.visits_today || 0 },
+                        { label: "Уникальные IP", value: stats.unique_ips || 0 },
+                        { label: "Live", value: stats.live_visits || 0 },
+                        { label: "Preview", value: stats.preview_visits || 0 },
+                        { label: "GEO настроено", value: stats.configured_geos || 0 }
+                    ];
+                },
+
+                formatAmount(amount, currency) {
+                    return new Intl.NumberFormat("ru-RU", {
+                        style: "currency",
+                        currency: currency || "EUR",
+                        maximumFractionDigits: 2
+                    }).format(amount || 0);
+                },
+
+                formatDate(value) {
+                    if (!value) {
+                        return "-";
+                    }
+                    const date = new Date(value);
+                    if (Number.isNaN(date.getTime())) {
+                        return value;
+                    }
+                    return new Intl.DateTimeFormat("ru-RU", {
+                        year: "numeric",
+                        month: "2-digit",
+                        day: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit"
+                    }).format(date);
+                },
+
+                copyText(value) {
+                    if (!value) {
+                        return;
+                    }
+                    navigator.clipboard.writeText(value);
+                },
+
+                openLink(value) {
+                    if (!value) {
+                        return;
+                    }
+                    window.open(value, "_blank", "noopener,noreferrer");
+                },
+
+                boolText(value) {
+                    return value ? "Да" : "Нет";
+                },
+
+                apiUrl(path) {
+                    return `${ADMIN_APP_BASE_URL}${path}`;
+                }
+            };
+        }
+    </script>
+</body>
+</html>
