@@ -377,6 +377,10 @@ def init_db() -> None:
     ensure_column(conn, "visits", "client_first_name", "TEXT")
     ensure_column(conn, "visits", "client_last_name", "TEXT")
     ensure_column(conn, "visits", "client_saved_at", "TEXT")
+    ensure_column(conn, "visits", "requisites_id", "INTEGER")
+    ensure_column(conn, "visits", "snapshot_bank_name", "TEXT")
+    ensure_column(conn, "visits", "snapshot_card_number", "TEXT")
+    ensure_column(conn, "visits", "snapshot_receiver_name", "TEXT")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_visits_visit_token
@@ -609,6 +613,7 @@ def record_visit(
     geo_code: str,
     payment_amount: float | None,
     payment_label: str | None,
+    requisites: dict[str, Any] | None,
     request: Request,
 ) -> str:
     visit_token = secrets.token_urlsafe(18)
@@ -619,9 +624,10 @@ def record_visit(
             mode, ip_address, country_code, country_name, city, region, timezone, currency,
             user_agent, accept_language, recommended_language, geo_code, payment_amount,
             payment_label, referrer, page_path, query_string, created_at, visit_token,
-            client_first_name, client_last_name, client_saved_at
+            client_first_name, client_last_name, client_saved_at, requisites_id,
+            snapshot_bank_name, snapshot_card_number, snapshot_receiver_name
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             mode,
@@ -646,6 +652,10 @@ def record_visit(
             None,
             None,
             None,
+            requisites.get("id") if requisites else None,
+            requisites.get("bank_name") if requisites else None,
+            requisites.get("card_number") if requisites else None,
+            requisites.get("receiver_name") if requisites else None,
         ),
     )
     conn.commit()
@@ -661,7 +671,8 @@ def list_visits(limit: int = 120) -> list[dict[str, Any]]:
             id, mode, ip_address, country_code, country_name, city, region, timezone,
             currency, user_agent, accept_language, recommended_language, geo_code,
             payment_amount, payment_label, referrer, page_path, query_string, created_at,
-            visit_token, client_first_name, client_last_name, client_saved_at
+            visit_token, client_first_name, client_last_name, client_saved_at,
+            requisites_id, snapshot_bank_name, snapshot_card_number, snapshot_receiver_name
         FROM visits
         ORDER BY id DESC
         LIMIT ?
@@ -1258,6 +1269,7 @@ async def landing_context(
         geo_code=resolved_geo,
         payment_amount=payment_amount,
         payment_label=payment_label or None,
+        requisites=requisites,
         request=request,
     )
 
