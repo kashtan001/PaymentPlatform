@@ -202,6 +202,35 @@ def clean_client_name(raw_value: str | None) -> str:
     return value[:CLIENT_NAME_MAX_LENGTH]
 
 
+def sanitize_payment_label(raw_value: str | None) -> str:
+    value = (raw_value or "").strip().lower()
+    if not value:
+        return ""
+    value = re.sub(r"[^a-z0-9]+", "-", value)
+    value = re.sub(r"-{2,}", "-", value).strip("-")
+    return value[:80]
+
+
+def payment_label_has_only_latin(raw_value: str | None) -> bool:
+    value = (raw_value or "").strip()
+    if not value:
+        return True
+    return re.fullmatch(r"[A-Za-z0-9 _-]+", value) is not None
+
+
+def normalize_manager_link(raw_value: str | None) -> str:
+    value = (raw_value or "").strip()
+    if not value:
+        return ""
+    if value == "-":
+        return ""
+    if value.startswith("@") and len(value) > 1:
+        return f"https://t.me/{value[1:]}"
+    if value.startswith("t.me/"):
+        return f"https://{value}"
+    return value
+
+
 def parse_payment_amount(raw_value: str | None) -> float | None:
     if raw_value is None:
         return None
@@ -223,11 +252,13 @@ def format_query_amount(amount: float) -> str:
 
 def build_payment_link(amount: float, geo_code: str, label: str = "") -> str:
     safe_geo = sanitize_geo_code(geo_code) or "ES"
+    geo_profile = get_geo_profile(safe_geo)
     params = {
         "payment": format_query_amount(amount),
         "geo": safe_geo,
+        "lang": sanitize_language_code(geo_profile.get("default_language")) or "en",
     }
-    clean_label = label.strip()
+    clean_label = sanitize_payment_label(label)
     if clean_label:
         params["label"] = clean_label
     return f"{WEB_URL}/?{urlencode(params)}"
@@ -591,7 +622,7 @@ def update_geo_requisites(geo_code: str, bank_name: str, card_number: str, recei
 def update_geo_manager(geo_code: str, manager_name: str, manager_telegram_url: str) -> dict[str, Any]:
     safe_geo = sanitize_geo_code(geo_code) or "ES"
     clean_name = manager_name.strip() or DEFAULT_GEO_CONFIGS[safe_geo]["manager_name"]
-    clean_url = manager_telegram_url.strip()
+    clean_url = normalize_manager_link(manager_telegram_url)
     conn = get_connection()
     conn.execute(
         """
@@ -1092,7 +1123,7 @@ async def change_manager_save(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.effective_message.reply_text("Нужно 2 строки: имя менеджера и Telegram-ссылка.")
         return WAITING_MANAGER
 
-    manager_link = "" if lines[1] == "-" else lines[1]
+    manager_link = normalize_manager_link("" if lines[1] == "-" else lines[1])
     selected_geo = get_selected_geo(context)
     update_geo_manager(selected_geo, lines[0], manager_link)
     await update.effective_message.reply_text(
@@ -1129,7 +1160,14 @@ async def create_link_label(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     amount = float(context.user_data.get("temp_amount", 0))
     selected_geo = get_selected_geo(context)
     label = update.effective_message.text.strip()
-    clean_label = "" if label == "-" else label
+    if label != "-" and not payment_label_has_only_latin(label):
+        await update.effective_message.reply_text(
+            "Назначение платежа можно вводить только латиницей, цифрами, пробелом и дефисом.\n"
+            "Пример: service payment или service-payment"
+        )
+        return WAITING_LINK_LABEL
+
+    clean_label = "" if label == "-" else sanitize_payment_label(label)
     link = build_payment_link(amount, selected_geo, clean_label)
     context.user_data.pop("temp_amount", None)
     await update.effective_message.reply_text(
