@@ -92,6 +92,28 @@
             box-shadow: 0 0 0 4px rgba(99, 91, 255, 0.12);
         }
 
+        .comment-card {
+            position: relative;
+            overflow: hidden;
+            background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+            border: 1px solid var(--line);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+        }
+
+        .comment-card::before {
+            content: "";
+            position: absolute;
+            inset: 0 auto 0 0;
+            width: 4px;
+            background: linear-gradient(180deg, rgba(99, 91, 255, 0.78) 0%, rgba(14, 165, 233, 0.44) 100%);
+        }
+
+        .comment-icon-shell {
+            background: rgba(99, 91, 255, 0.08);
+            color: var(--accent);
+            border: 1px solid rgba(99, 91, 255, 0.14);
+        }
+
         .detail-row + .detail-row {
             border-top: 1px solid var(--line);
         }
@@ -227,10 +249,10 @@
                                     <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.bank"></p>
                                     <p class="mt-1 truncate text-sm font-semibold text-slate-950" x-text="requisites.bank_name"></p>
                                 </div>
-                                <button type="button" @click="copyField(requisites.bank_name)" :disabled="!clientReady"
+                                <button type="button" @click="copyField('bank', requisites.bank_name)"
                                         class="rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition"
-                                        :class="clientReady ? 'bg-slate-950 text-white hover:bg-slate-800' : 'bg-slate-100 text-slate-400 cursor-not-allowed'"
-                                        x-text="copy.copyAction"></button>
+                                        :class="copiedField === 'bank' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800'"
+                                        x-text="copiedField === 'bank' ? '✓ ' + copy.copied : copy.copyAction"></button>
                             </div>
 
                             <div class="detail-row flex items-center justify-between gap-4 px-4 py-4 sm:px-5">
@@ -238,10 +260,10 @@
                                     <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.account"></p>
                                     <p class="mt-1 font-mono text-sm font-medium text-slate-950" x-text="requisites.card_number"></p>
                                 </div>
-                                <button type="button" @click="copyField(requisites.card_number)" :disabled="!clientReady"
+                                <button type="button" @click="copyField('card', requisites.card_number)"
                                         class="rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition"
-                                        :class="clientReady ? 'bg-slate-950 text-white hover:bg-slate-800' : 'bg-slate-100 text-slate-400 cursor-not-allowed'"
-                                        x-text="copy.copyAction"></button>
+                                        :class="copiedField === 'card' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800'"
+                                        x-text="copiedField === 'card' ? '✓ ' + copy.copied : copy.copyAction"></button>
                             </div>
 
                             <div class="detail-row flex items-center justify-between gap-4 px-4 py-4 sm:px-5">
@@ -249,10 +271,24 @@
                                     <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.receiver"></p>
                                     <p class="mt-1 truncate text-sm font-semibold text-slate-950" x-text="requisites.receiver_name"></p>
                                 </div>
-                                <button type="button" @click="copyField(requisites.receiver_name)" :disabled="!clientReady"
+                                <button type="button" @click="copyField('receiver', requisites.receiver_name)"
                                         class="rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition"
-                                        :class="clientReady ? 'bg-slate-950 text-white hover:bg-slate-800' : 'bg-slate-100 text-slate-400 cursor-not-allowed'"
-                                        x-text="copy.copyAction"></button>
+                                        :class="copiedField === 'receiver' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800'"
+                                        x-text="copiedField === 'receiver' ? '✓ ' + copy.copied : copy.copyAction"></button>
+                            </div>
+                        </div>
+
+                        <div x-show="hasPaymentComment()" x-cloak class="comment-card mt-6 rounded-[1.5rem] px-5 py-5 sm:px-6">
+                            <div class="flex items-start gap-4">
+                                <div class="comment-icon-shell flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8 10h8M8 14h5m-7 6 2.8-2H17a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v8a3 3 0 0 0 2 2.83V20z" />
+                                    </svg>
+                                </div>
+                                <div class="min-w-0">
+                                    <p class="text-[11px] font-medium uppercase tracking-[0.26em] text-slate-400" x-text="copy.paymentComment"></p>
+                                    <p class="mt-3 break-words whitespace-pre-line text-sm leading-6 text-slate-700" x-text="payment.comment"></p>
+                                </div>
                             </div>
                         </div>
 
@@ -338,6 +374,7 @@
                 invalidText: "Ask your manager for a valid payment link with the amount included.",
                 bankTransfer: "Bank transfer",
                 paymentPurpose: "Payment purpose",
+                paymentComment: "Payment comment",
                 timerLabel: "Details refresh in",
                 timerLive: "Live",
                 timerText: "When the timer reaches zero, the page will refresh and load the latest payment details.",
@@ -364,7 +401,7 @@
                 afterPaymentHint: "Send the receipt to your manager in Telegram after the transfer is complete.",
                 managerButton: "Open Telegram",
                 managerUnavailable: "Manager Telegram link is not configured yet. Contact your manager directly.",
-                saveRequired: "Save your first and last name to enable copy actions and manager access."
+                saveRequired: "Save your first and last name to enable manager access."
             },
             ru: {
                 loading: "Загрузка",
@@ -375,6 +412,7 @@
                 invalidText: "Попросите менеджера отправить корректную ссылку, в которой уже указана сумма.",
                 bankTransfer: "Банковский перевод",
                 paymentPurpose: "Назначение платежа",
+                paymentComment: "Комментарий к платежу",
                 timerLabel: "Реквизиты обновятся через",
                 timerLive: "Активно",
                 timerText: "Когда таймер закончится, страница перезагрузится и подтянет актуальные реквизиты.",
@@ -401,7 +439,7 @@
                 afterPaymentHint: "Как только перевод будет выполнен, отправьте чек вашему менеджеру в Telegram.",
                 managerButton: "Открыть Telegram",
                 managerUnavailable: "Ссылка на Telegram менеджера пока не настроена. Свяжитесь с ним напрямую.",
-                saveRequired: "Сначала сохраните имя и фамилию, чтобы открыть быстрые действия и переход к менеджеру."
+                saveRequired: "Сначала сохраните имя и фамилию, чтобы открыть доступ к менеджеру."
             },
             es: {
                 loading: "Cargando",
@@ -412,6 +450,7 @@
                 invalidText: "Pide a tu manager un enlace correcto con el importe incluido.",
                 bankTransfer: "Transferencia bancaria",
                 paymentPurpose: "Concepto del pago",
+                paymentComment: "Comentario del pago",
                 timerLabel: "Los datos se actualizarán en",
                 timerLive: "Activo",
                 timerText: "Cuando el temporizador llegue a cero, la página se recargará con los datos más recientes.",
@@ -438,7 +477,7 @@
                 afterPaymentHint: "Cuando completes la transferencia, envía el comprobante a tu manager en Telegram.",
                 managerButton: "Abrir Telegram",
                 managerUnavailable: "El enlace de Telegram del manager aún no está configurado.",
-                saveRequired: "Guarda tu nombre y apellido para activar las acciones rápidas y el acceso al manager."
+                saveRequired: "Guarda tu nombre y apellido para activar el acceso al manager."
             },
             it: {
                 loading: "Caricamento",
@@ -449,6 +488,7 @@
                 invalidText: "Chiedi al tuo manager un link corretto con l'importo già incluso.",
                 bankTransfer: "Bonifico bancario",
                 paymentPurpose: "Causale",
+                paymentComment: "Commento al pagamento",
                 timerLabel: "I dati si aggiorneranno tra",
                 timerLive: "Attivo",
                 timerText: "Quando il timer arriva a zero, la pagina si ricarica con i dati aggiornati.",
@@ -475,7 +515,7 @@
                 afterPaymentHint: "Dopo il bonifico, invia la ricevuta al tuo manager su Telegram.",
                 managerButton: "Apri Telegram",
                 managerUnavailable: "Il link Telegram del manager non è ancora configurato.",
-                saveRequired: "Salva nome e cognome per attivare le azioni rapide e l'accesso al manager."
+                saveRequired: "Salva nome e cognome per attivare l'accesso al manager."
             },
             de: {
                 loading: "Wird geladen",
@@ -486,6 +526,7 @@
                 invalidText: "Bitte deinen Manager um einen gültigen Link mit dem bereits eingetragenen Betrag.",
                 bankTransfer: "Banküberweisung",
                 paymentPurpose: "Verwendungszweck",
+                paymentComment: "Zahlungskommentar",
                 timerLabel: "Daten aktualisieren sich in",
                 timerLive: "Aktiv",
                 timerText: "Wenn der Timer abläuft, lädt die Seite die neuesten Zahlungsdaten neu.",
@@ -512,7 +553,7 @@
                 afterPaymentHint: "Sende den Beleg nach der Überweisung an deinen Manager in Telegram.",
                 managerButton: "Telegram öffnen",
                 managerUnavailable: "Der Telegram-Link des Managers ist noch nicht eingerichtet.",
-                saveRequired: "Speichere Vorname und Nachname, um Schnellaktionen und den Manager-Zugang zu aktivieren."
+                saveRequired: "Speichere Vorname und Nachname, um den Manager-Zugang zu aktivieren."
             },
             fr: {
                 loading: "Chargement",
@@ -523,6 +564,7 @@
                 invalidText: "Demandez à votre manager un lien valide avec le montant déjà inclus.",
                 bankTransfer: "Virement bancaire",
                 paymentPurpose: "Objet du paiement",
+                paymentComment: "Commentaire du paiement",
                 timerLabel: "Les coordonnées seront actualisées dans",
                 timerLive: "Actif",
                 timerText: "Quand le minuteur atteint zéro, la page se recharge avec les coordonnées les plus récentes.",
@@ -549,7 +591,7 @@
                 afterPaymentHint: "Une fois le virement effectué, envoyez le reçu à votre manager sur Telegram.",
                 managerButton: "Ouvrir Telegram",
                 managerUnavailable: "Le lien Telegram du manager n'est pas encore configuré.",
-                saveRequired: "Enregistrez votre prénom et votre nom pour activer les actions rapides et l'accès au manager."
+                saveRequired: "Enregistrez votre prénom et votre nom pour activer l'accès au manager."
             }
         };
 
@@ -590,7 +632,8 @@
                 payment: {
                     amount: null,
                     currency: "EUR",
-                    label: ""
+                    label: "",
+                    comment: ""
                 },
                 client: {
                     first_name: "",
@@ -608,9 +651,14 @@
                     this.availableLanguages = context.available_languages || languageCatalog;
                     this.recommendedLanguage = this.resolveLanguageCode(context.recommended_language || this.geo.default_language || "en");
 
-                    const queryLang = new URLSearchParams(window.location.search).get("lang");
+                    const queryParams = new URLSearchParams(window.location.search);
+                    const queryLang = queryParams.get("lang");
+                    const explicitGeo = queryParams.get("geo");
                     const storedLang = window.localStorage.getItem("dream-team-language");
-                    this.applyLanguage(this.resolveLanguageCode(queryLang || storedLang || this.recommendedLanguage || "en"));
+                    const initialLanguage = explicitGeo
+                        ? this.resolveLanguageCode(queryLang || this.recommendedLanguage || "en")
+                        : this.resolveLanguageCode(queryLang || storedLang || this.recommendedLanguage || "en");
+                    this.applyLanguage(initialLanguage);
 
                     this.restoreClient();
                     if (this.mode !== "invalid" && this.hasClientName()) {
@@ -784,8 +832,22 @@
                     return Boolean(String(this.payment.label || "").trim());
                 },
 
+                hasPaymentComment() {
+                    return Boolean(String(this.payment.comment || "").trim());
+                },
+
                 managerUrl() {
-                    return String(this.geo.manager_telegram_url || "").trim();
+                    const raw = String(this.geo.manager_telegram_url || "").trim();
+                    if (!raw) {
+                        return "";
+                    }
+                    if (raw.startsWith("@") && raw.length > 1) {
+                        return `https://t.me/${raw.slice(1)}`;
+                    }
+                    if (raw.startsWith("t.me/")) {
+                        return `https://${raw}`;
+                    }
+                    return raw;
                 },
 
                 hasManagerLink() {
@@ -818,39 +880,45 @@
                     return `${minutes}:${seconds}`;
                 },
 
-                async copyText(text) {
-                    const value = String(text || "").trim();
-                    if (!value || !this.clientReady) {
-                        return;
-                    }
-
-                    try {
-                        if (navigator.clipboard && navigator.clipboard.writeText) {
-                            await navigator.clipboard.writeText(value);
-                        } else {
-                            const helper = document.createElement("textarea");
-                            helper.value = value;
-                            helper.setAttribute("readonly", "");
-                            helper.style.position = "absolute";
-                            helper.style.left = "-9999px";
-                            document.body.appendChild(helper);
-                            helper.select();
-                            document.execCommand("copy");
-                            document.body.removeChild(helper);
-                        }
-
-                        this.copyMessage = this.copy.copied;
-                        window.clearTimeout(this.copyTimerId);
-                        this.copyTimerId = window.setTimeout(() => {
-                            this.copyMessage = "";
-                        }, 1600);
-                    } catch (error) {
-                        this.copyMessage = "";
-                    }
+                fallbackCopy(value) {
+                    const helper = document.createElement("textarea");
+                    helper.value = value;
+                    helper.setAttribute("readonly", "");
+                    helper.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0;";
+                    document.body.appendChild(helper);
+                    helper.focus();
+                    helper.select();
+                    try { document.execCommand("copy"); } catch (_) {}
+                    document.body.removeChild(helper);
                 },
 
-                copyField(value) {
+                async copyText(text) {
+                    const value = String(text || "").trim();
+                    if (!value) return;
+
+                    try {
+                        if (navigator.clipboard && window.isSecureContext) {
+                            await navigator.clipboard.writeText(value);
+                        } else {
+                            this.fallbackCopy(value);
+                        }
+                    } catch (_) {
+                        this.fallbackCopy(value);
+                    }
+
+                    this.copyMessage = this.copy.copied;
+                    window.clearTimeout(this.copyTimerId);
+                    this.copyTimerId = window.setTimeout(() => { this.copyMessage = ""; }, 1800);
+                },
+
+                copiedField: null,
+                copiedTimerId: null,
+
+                copyField(fieldKey, value) {
                     this.copyText(value);
+                    this.copiedField = fieldKey;
+                    window.clearTimeout(this.copiedTimerId);
+                    this.copiedTimerId = window.setTimeout(() => { this.copiedField = null; }, 1800);
                 }
             };
         }
