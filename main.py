@@ -847,6 +847,13 @@ def remove_bot_admin(target_user_id: int) -> tuple[bool, str]:
     return True, "Администратор удален."
 
 
+def parse_admin_ids_from_args(args: list[str]) -> list[int]:
+    if not args:
+        return []
+    combined = ",".join(args)
+    return sorted(parse_admin_ids(combined))
+
+
 def save_landing_client(visit_token: str, first_name: str, last_name: str) -> dict[str, Any]:
     clean_token = (visit_token or "").strip()
     clean_first_name = clean_client_name(first_name)
@@ -1205,20 +1212,33 @@ async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     if not context.args:
         await update.effective_message.reply_text(
-            "Укажите Telegram ID нового администратора.\nПример: /addadmin 123456789",
+            "Укажите один или несколько Telegram ID.\n"
+            "Пример: /addadmin 123456789 987654321\n"
+            "Также можно: /addadmin 123456789,987654321",
             reply_markup=main_keyboard(),
         )
         return
-    target_id = parse_optional_int(context.args[0])
-    if target_id is None or target_id <= 0:
+    target_ids = parse_admin_ids_from_args(context.args)
+    if not target_ids:
         await update.effective_message.reply_text("Нужен корректный числовой Telegram ID.", reply_markup=main_keyboard())
         return
-    added = add_bot_admin(update.effective_user.id, target_id)
-    if not added:
-        await update.effective_message.reply_text("Этот администратор уже добавлен.", reply_markup=main_keyboard())
-        return
+    added_ids: list[int] = []
+    skipped_ids: list[int] = []
+    for target_id in target_ids:
+        added = add_bot_admin(update.effective_user.id, target_id)
+        if added:
+            added_ids.append(target_id)
+        else:
+            skipped_ids.append(target_id)
+    summary_lines = []
+    if added_ids:
+        summary_lines.append(f"Добавлены: {', '.join(str(item) for item in added_ids)}")
+    if skipped_ids:
+        summary_lines.append(f"Уже были в списке: {', '.join(str(item) for item in skipped_ids)}")
+    if not summary_lines:
+        summary_lines.append("Никого не удалось добавить.")
     await update.effective_message.reply_text(
-        f"Администратор {target_id} добавлен.\n\n{build_admins_text()}",
+        f"{chr(10).join(summary_lines)}\n\n{build_admins_text()}",
         reply_markup=main_keyboard(),
     )
 
@@ -1228,17 +1248,33 @@ async def remove_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if not context.args:
         await update.effective_message.reply_text(
-            "Укажите Telegram ID администратора для удаления.\nПример: /removeadmin 123456789",
+            "Укажите один или несколько Telegram ID.\n"
+            "Пример: /removeadmin 123456789 987654321\n"
+            "Также можно: /removeadmin 123456789,987654321",
             reply_markup=main_keyboard(),
         )
         return
-    target_id = parse_optional_int(context.args[0])
-    if target_id is None or target_id <= 0:
+    target_ids = parse_admin_ids_from_args(context.args)
+    if not target_ids:
         await update.effective_message.reply_text("Нужен корректный числовой Telegram ID.", reply_markup=main_keyboard())
         return
-    success, message = remove_bot_admin(target_id)
+    removed_ids: list[int] = []
+    failed_messages: list[str] = []
+    for target_id in target_ids:
+        success, message = remove_bot_admin(target_id)
+        if success:
+            removed_ids.append(target_id)
+        else:
+            failed_messages.append(f"{target_id}: {message}")
+    summary_lines = []
+    if removed_ids:
+        summary_lines.append(f"Удалены: {', '.join(str(item) for item in removed_ids)}")
+    if failed_messages:
+        summary_lines.extend(failed_messages)
+    if not summary_lines:
+        summary_lines.append("Никого не удалось удалить.")
     await update.effective_message.reply_text(
-        f"{message}\n\n{build_admins_text()}",
+        f"{chr(10).join(summary_lines)}\n\n{build_admins_text()}",
         reply_markup=main_keyboard(),
     )
 
