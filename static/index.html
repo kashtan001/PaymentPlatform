@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dream Team Pay</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ["Onest", "sans-serif"],
+                        mono: ["IBM Plex Mono", "monospace"]
+                    },
+                    boxShadow: {
+                        shell: "0 32px 80px rgba(15, 23, 42, 0.08)",
+                        soft: "0 18px 40px rgba(15, 23, 42, 0.05)"
+                    }
+                }
+            }
+        };
+    </script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+    <style>
+        :root {
+            --page-bg: #f6f9fc;
+            --page-top: #eef4fb;
+            --panel: rgba(255, 255, 255, 0.96);
+            --panel-soft: #f9fbff;
+            --line: #dfe7f3;
+            --line-strong: #ccd7e6;
+            --text: #0f172a;
+            --muted: #5b6b81;
+            --accent: #635bff;
+            --accent-dark: #4f46e5;
+            --success: #0f766e;
+        }
+
+        [x-cloak] {
+            display: none !important;
+        }
+
+        html, body {
+            min-height: 100%;
+        }
+
+        body {
+            font-family: "Onest", sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(99, 91, 255, 0.10), transparent 26%),
+                radial-gradient(circle at top right, rgba(14, 165, 233, 0.08), transparent 22%),
+                linear-gradient(180deg, var(--page-top) 0%, var(--page-bg) 30%, #f8fbff 100%);
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background-image: linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px);
+            background-size: 100% 36px;
+            mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.4), transparent 84%);
+        }
+
+        .surface {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            box-shadow: 0 20px 48px rgba(15, 23, 42, 0.06);
+        }
+
+        .surface-soft {
+            background: var(--panel-soft);
+            border: 1px solid var(--line);
+        }
+
+        .field-input {
+            border: 1px solid var(--line);
+            background: #ffffff;
+            color: var(--text);
+            transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+        }
+
+        .field-input:focus {
+            outline: none;
+            border-color: rgba(99, 91, 255, 0.48);
+            box-shadow: 0 0 0 4px rgba(99, 91, 255, 0.12);
+        }
+
+        .detail-row + .detail-row {
+            border-top: 1px solid var(--line);
+        }
+    </style>
+</head>
+<body x-data="landingApp()" x-init="init()">
+    <div class="mx-auto min-h-screen max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
+        <header class="mb-6 flex items-center justify-between gap-3">
+            <div class="surface flex items-center gap-3 rounded-full px-3 py-2 shadow-soft">
+                <div class="flex h-11 w-11 items-center justify-center rounded-full bg-slate-950 text-sm font-semibold text-white">D</div>
+                <div>
+                    <p class="text-[11px] uppercase tracking-[0.28em] text-slate-400">Dream Team</p>
+                    <p class="text-sm font-semibold text-slate-900">Pay</p>
+                </div>
+            </div>
+
+            <button type="button" @click="showLanguages = true" class="surface rounded-full px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
+                <span x-text="languageLabel(currentLang)"></span>
+            </button>
+        </header>
+
+        <main>
+            <div x-show="loading" x-cloak class="surface rounded-[2rem] px-6 py-16 text-center shadow-shell">
+                <p class="text-sm uppercase tracking-[0.28em] text-slate-400" x-text="copy.loading"></p>
+            </div>
+
+            <section x-show="!loading && mode === 'invalid'" x-cloak id="payment-shell" class="surface mx-auto max-w-2xl rounded-[2rem] p-6 shadow-shell sm:p-8">
+                <div class="mx-auto max-w-xl text-center">
+                    <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[rgba(99,91,255,0.10)] text-[var(--accent)]">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 8v4m0 4h.01M5.6 19h12.8c1.33 0 2.16-1.44 1.49-2.6L13.49 5.2c-.67-1.16-2.31-1.16-2.98 0L4.11 16.4C3.44 17.56 4.27 19 5.6 19z" />
+                        </svg>
+                    </div>
+                    <h1 class="mt-6 text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl" x-text="copy.invalidTitle"></h1>
+                    <p class="mt-4 text-base leading-7 text-slate-600" x-text="copy.invalidText"></p>
+                    <div class="mt-8 flex flex-wrap justify-center gap-3">
+                        <a x-show="hasManagerLink()" x-cloak :href="managerUrl()" target="_blank" rel="noreferrer"
+                           class="inline-flex items-center justify-center rounded-full bg-[var(--accent)] px-6 py-3 text-sm font-semibold text-white transition hover:bg-[var(--accent-dark)]">
+                            <span x-text="copy.managerButton"></span>
+                        </a>
+                    </div>
+                    <p x-show="!hasManagerLink()" x-cloak class="mt-5 text-sm leading-6 text-slate-500" x-text="copy.managerUnavailable"></p>
+                </div>
+            </section>
+
+            <section x-show="!loading && mode !== 'invalid'" x-cloak id="payment-shell" class="surface rounded-[2rem] p-4 shadow-shell sm:p-6 lg:p-8">
+                <div class="grid gap-6 lg:grid-cols-[0.92fr_1.08fr] lg:gap-8">
+                    <div class="surface-soft rounded-[1.75rem] p-5 sm:p-6">
+                        <div class="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <p class="text-[11px] font-medium uppercase tracking-[0.28em] text-slate-400" x-text="copy.bankTransfer"></p>
+                                <h1 class="mt-3 text-4xl font-semibold tracking-tight text-slate-950 sm:text-5xl" x-text="formattedAmount()"></h1>
+                            </div>
+                            <div class="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-500" x-text="payment.currency"></div>
+                        </div>
+
+                        <div x-show="hasPaymentLabel()" x-cloak class="mt-6 rounded-[1.35rem] bg-white px-4 py-4">
+                            <p class="text-[11px] font-medium uppercase tracking-[0.26em] text-slate-400" x-text="copy.paymentPurpose"></p>
+                            <p class="mt-2 text-sm font-medium leading-6 text-slate-700" x-text="payment.label"></p>
+                        </div>
+
+                        <div x-show="showTimer()" x-cloak class="mt-6 rounded-[1.35rem] border border-[var(--line)] bg-white px-4 py-4">
+                            <div class="flex items-center justify-between gap-4">
+                                <div>
+                                    <p class="text-[11px] font-medium uppercase tracking-[0.26em] text-slate-400" x-text="copy.timerLabel"></p>
+                                    <p class="mt-2 font-mono text-2xl font-medium text-slate-950" x-text="formattedCountdown()"></p>
+                                </div>
+                                <div class="rounded-full bg-[rgba(99,91,255,0.08)] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">
+                                    <span x-text="copy.timerLive"></span>
+                                </div>
+                            </div>
+                            <p class="mt-3 text-sm leading-6 text-slate-600" x-text="copy.timerText"></p>
+                        </div>
+
+                        <div class="mt-6 rounded-[1.55rem] border border-[var(--line)] bg-white p-4 sm:p-5">
+                            <div class="flex items-start justify-between gap-4">
+                                <div>
+                                    <p class="text-[11px] font-medium uppercase tracking-[0.26em] text-slate-400" x-text="copy.clientSection"></p>
+                                    <h2 class="mt-2 text-xl font-semibold text-slate-950" x-text="copy.clientTitle"></h2>
+                                </div>
+                                <button x-show="clientReady && !editingClient" x-cloak type="button" @click="editClient()"
+                                        class="rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-600">
+                                    <span x-text="copy.editButton"></span>
+                                </button>
+                            </div>
+
+                            <p class="mt-3 text-sm leading-6 text-slate-600" x-text="copy.clientHint"></p>
+
+                            <form x-show="!clientReady || editingClient" x-cloak class="mt-5 space-y-4" @submit.prevent="submitClient()">
+                                <div class="grid gap-4 sm:grid-cols-2">
+                                    <label class="block">
+                                        <span class="mb-2 block text-sm font-medium text-slate-700" x-text="copy.firstName"></span>
+                                        <input type="text" x-model="client.first_name" class="field-input w-full rounded-2xl px-4 py-3.5" autocomplete="given-name">
+                                    </label>
+                                    <label class="block">
+                                        <span class="mb-2 block text-sm font-medium text-slate-700" x-text="copy.lastName"></span>
+                                        <input type="text" x-model="client.last_name" class="field-input w-full rounded-2xl px-4 py-3.5" autocomplete="family-name">
+                                    </label>
+                                </div>
+
+                                <div x-show="clientError" x-cloak class="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" x-text="clientError"></div>
+
+                                <button type="submit" :disabled="savingClient"
+                                        class="inline-flex w-full items-center justify-center rounded-2xl bg-slate-950 px-5 py-3.5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60">
+                                    <span x-text="savingClient ? copy.savingClient : copy.saveClient"></span>
+                                </button>
+                            </form>
+
+                            <div x-show="clientReady && !editingClient" x-cloak class="mt-5 rounded-[1.35rem] bg-slate-50 px-4 py-4">
+                                <p class="text-[11px] font-medium uppercase tracking-[0.26em] text-slate-400" x-text="copy.savedClient"></p>
+                                <p class="mt-2 text-base font-semibold text-slate-950">
+                                    <span x-text="client.first_name"></span>
+                                    <span x-text="client.last_name"></span>
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="surface-soft rounded-[1.75rem] p-5 sm:p-6">
+                        <div class="flex items-start justify-between gap-4">
+                            <div>
+                                <p class="text-[11px] font-medium uppercase tracking-[0.28em] text-slate-400" x-text="copy.paymentDetails"></p>
+                                <h2 class="mt-2 text-2xl font-semibold tracking-tight text-slate-950" x-text="copy.paymentDetailsTitle"></h2>
+                            </div>
+                            <p x-show="copyMessage" x-cloak class="text-sm font-medium text-[var(--success)]" x-text="copyMessage"></p>
+                        </div>
+
+                        <p class="mt-3 text-sm leading-6 text-slate-600" x-text="copy.paymentDetailsHint"></p>
+
+                        <div class="mt-6 overflow-hidden rounded-[1.5rem] border border-[var(--line)] bg-white">
+                            <div class="detail-row flex items-center justify-between gap-4 px-4 py-4 sm:px-5">
+                                <div class="min-w-0">
+                                    <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.bank"></p>
+                                    <p class="mt-1 truncate text-sm font-semibold text-slate-950" x-text="requisites.bank_name"></p>
+                                </div>
+                                <button type="button" @click="copyField(requisites.bank_name)" :disabled="!clientReady"
+                                        class="rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition"
+                                        :class="clientReady ? 'bg-slate-950 text-white hover:bg-slate-800' : 'bg-slate-100 text-slate-400 cursor-not-allowed'"
+                                        x-text="copy.copyAction"></button>
+                            </div>
+
+                            <div class="detail-row flex items-center justify-between gap-4 px-4 py-4 sm:px-5">
+                                <div class="min-w-0">
+                                    <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.account"></p>
+                                    <p class="mt-1 font-mono text-sm font-medium text-slate-950" x-text="requisites.card_number"></p>
+                                </div>
+                                <button type="button" @click="copyField(requisites.card_number)" :disabled="!clientReady"
+                                        class="rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition"
+                                        :class="clientReady ? 'bg-slate-950 text-white hover:bg-slate-800' : 'bg-slate-100 text-slate-400 cursor-not-allowed'"
+                                        x-text="copy.copyAction"></button>
+                            </div>
+
+                            <div class="detail-row flex items-center justify-between gap-4 px-4 py-4 sm:px-5">
+                                <div class="min-w-0">
+                                    <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.receiver"></p>
+                                    <p class="mt-1 truncate text-sm font-semibold text-slate-950" x-text="requisites.receiver_name"></p>
+                                </div>
+                                <button type="button" @click="copyField(requisites.receiver_name)" :disabled="!clientReady"
+                                        class="rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition"
+                                        :class="clientReady ? 'bg-slate-950 text-white hover:bg-slate-800' : 'bg-slate-100 text-slate-400 cursor-not-allowed'"
+                                        x-text="copy.copyAction"></button>
+                            </div>
+                        </div>
+
+                        <div class="mt-6 rounded-[1.5rem] border border-[var(--line)] bg-white px-4 py-5 sm:px-5">
+                            <p class="text-[11px] font-medium uppercase tracking-[0.26em] text-slate-400" x-text="copy.afterPayment"></p>
+                            <p class="mt-3 text-sm leading-6 text-slate-700" x-text="copy.afterPaymentHint"></p>
+
+                            <div class="mt-5 flex flex-wrap gap-3">
+                                <a x-show="hasManagerLink() && clientReady" x-cloak :href="managerUrl()" target="_blank" rel="noreferrer"
+                                   class="inline-flex items-center justify-center rounded-2xl bg-[var(--accent)] px-5 py-3.5 text-sm font-semibold text-white transition hover:bg-[var(--accent-dark)]">
+                                    <span x-text="copy.managerButton"></span>
+                                </a>
+                            </div>
+
+                            <p x-show="!clientReady" x-cloak class="mt-4 text-sm leading-6 text-slate-500" x-text="copy.saveRequired"></p>
+                            <p x-show="clientReady && !hasManagerLink()" x-cloak class="mt-4 text-sm leading-6 text-slate-500" x-text="copy.managerUnavailable"></p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div x-show="showLanguages" x-cloak class="fixed inset-0 z-50 flex items-end bg-slate-950/35 p-0 sm:items-center sm:justify-center sm:p-6"
+         @keydown.escape.window="showLanguages = false">
+        <div class="surface w-full rounded-t-[2rem] p-5 shadow-shell sm:max-w-xl sm:rounded-[2rem]" @click.outside="showLanguages = false">
+            <div class="flex items-center justify-between gap-4">
+                <div>
+                    <p class="text-[11px] font-medium uppercase tracking-[0.26em] text-slate-400" x-text="copy.chooseLanguage"></p>
+                    <p class="mt-2 text-sm text-slate-600">
+                        <span x-text="copy.defaultLanguage"></span>
+                        <span class="font-medium text-slate-950" x-text="languageLabel(recommendedLanguage)"></span>
+                    </p>
+                </div>
+                <button type="button" class="rounded-full border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600" @click="showLanguages = false" x-text="copy.close"></button>
+            </div>
+
+            <div class="mt-5 grid gap-2 sm:grid-cols-2">
+                <template x-for="language in availableLanguages" :key="language.code">
+                    <button type="button" @click="changeLanguage(language.code)"
+                            class="flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left text-sm transition"
+                            :class="currentLang === language.code ? 'border-[var(--accent)] bg-[rgba(99,91,255,0.08)] text-slate-950' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'">
+                        <span x-text="language.label"></span>
+                        <span class="text-xs uppercase tracking-[0.22em]" x-text="language.code"></span>
+                    </button>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const APP_BASE_URL = window.location.protocol.startsWith("http")
+            ? window.location.origin
+            : "http://127.0.0.1:8000";
+
+        const CLIENT_STORAGE_KEY = "dream-team-payment-client";
+
+        const localeMap = {
+            en: "en-GB",
+            ru: "ru-RU",
+            es: "es-ES",
+            it: "it-IT",
+            de: "de-DE",
+            fr: "fr-FR"
+        };
+
+        const languageCatalog = [
+            { code: "en", label: "English" },
+            { code: "ru", label: "Русский" },
+            { code: "es", label: "Español" },
+            { code: "it", label: "Italiano" },
+            { code: "de", label: "Deutsch" },
+            { code: "fr", label: "Français" }
+        ];
+
+        const translations = {
+            en: {
+                loading: "Loading",
+                chooseLanguage: "Choose language",
+                defaultLanguage: "Default:",
+                close: "Close",
+                invalidTitle: "This payment link is incomplete",
+                invalidText: "Ask your manager for a valid payment link with the amount included.",
+                bankTransfer: "Bank transfer",
+                paymentPurpose: "Payment purpose",
+                timerLabel: "Details refresh in",
+                timerLive: "Live",
+                timerText: "When the timer reaches zero, the page will refresh and load the latest payment details.",
+                clientSection: "Payer details",
+                clientTitle: "Enter your first and last name",
+                clientHint: "These details are stored with this payment request.",
+                firstName: "First name",
+                lastName: "Last name",
+                saveClient: "Save and continue",
+                savingClient: "Saving...",
+                savedClient: "Saved for this payment",
+                editButton: "Edit",
+                requiredFields: "Enter both first name and last name.",
+                saveFailed: "Could not save your details. Please try again.",
+                paymentDetails: "Payment details",
+                paymentDetailsTitle: "Transfer using the details below",
+                paymentDetailsHint: "Copy the bank details exactly as shown on this page.",
+                bank: "Bank",
+                account: "Card / account",
+                receiver: "Receiver",
+                copyAction: "Copy",
+                copied: "Copied",
+                afterPayment: "After payment",
+                afterPaymentHint: "Send the receipt to your manager in Telegram after the transfer is complete.",
+                managerButton: "Open Telegram",
+                managerUnavailable: "Manager Telegram link is not configured yet. Contact your manager directly.",
+                saveRequired: "Save your first and last name to enable copy actions and manager access."
+            },
+            ru: {
+                loading: "Загрузка",
+                chooseLanguage: "Выберите язык",
+                defaultLanguage: "По умолчанию:",
+                close: "Закрыть",
+                invalidTitle: "Ссылка на оплату заполнена не полностью",
+                invalidText: "Попросите менеджера отправить корректную ссылку, в которой уже указана сумма.",
+                bankTransfer: "Банковский перевод",
+                paymentPurpose: "Назначение платежа",
+                timerLabel: "Реквизиты обновятся через",
+                timerLive: "Активно",
+                timerText: "Когда таймер закончится, страница перезагрузится и подтянет актуальные реквизиты.",
+                clientSection: "Данные плательщика",
+                clientTitle: "Введите имя и фамилию",
+                clientHint: "Эти данные сохраняются вместе с текущим запросом на оплату.",
+                firstName: "Имя",
+                lastName: "Фамилия",
+                saveClient: "Сохранить и продолжить",
+                savingClient: "Сохраняем...",
+                savedClient: "Сохранено для этой оплаты",
+                editButton: "Изменить",
+                requiredFields: "Укажите и имя, и фамилию.",
+                saveFailed: "Не удалось сохранить данные. Попробуйте еще раз.",
+                paymentDetails: "Реквизиты",
+                paymentDetailsTitle: "Переведите сумму по реквизитам ниже",
+                paymentDetailsHint: "Копируйте реквизиты в точности так, как они указаны на этой странице.",
+                bank: "Банк",
+                account: "Карта / счет",
+                receiver: "Получатель",
+                copyAction: "Копировать",
+                copied: "Скопировано",
+                afterPayment: "После оплаты",
+                afterPaymentHint: "Как только перевод будет выполнен, отправьте чек вашему менеджеру в Telegram.",
+                managerButton: "Открыть Telegram",
+                managerUnavailable: "Ссылка на Telegram менеджера пока не настроена. Свяжитесь с ним напрямую.",
+                saveRequired: "Сначала сохраните имя и фамилию, чтобы открыть быстрые действия и переход к менеджеру."
+            },
+            es: {
+                loading: "Cargando",
+                chooseLanguage: "Elegir idioma",
+                defaultLanguage: "Por defecto:",
+                close: "Cerrar",
+                invalidTitle: "Este enlace de pago está incompleto",
+                invalidText: "Pide a tu manager un enlace correcto con el importe incluido.",
+                bankTransfer: "Transferencia bancaria",
+                paymentPurpose: "Concepto del pago",
+                timerLabel: "Los datos se actualizarán en",
+                timerLive: "Activo",
+                timerText: "Cuando el temporizador llegue a cero, la página se recargará con los datos más recientes.",
+                clientSection: "Datos del pagador",
+                clientTitle: "Introduce tu nombre y apellido",
+                clientHint: "Estos datos se guardan junto con esta solicitud de pago.",
+                firstName: "Nombre",
+                lastName: "Apellido",
+                saveClient: "Guardar y continuar",
+                savingClient: "Guardando...",
+                savedClient: "Guardado para este pago",
+                editButton: "Editar",
+                requiredFields: "Introduce nombre y apellido.",
+                saveFailed: "No se pudieron guardar tus datos. Inténtalo de nuevo.",
+                paymentDetails: "Datos de pago",
+                paymentDetailsTitle: "Haz la transferencia con estos datos",
+                paymentDetailsHint: "Copia los datos exactamente como aparecen en esta página.",
+                bank: "Banco",
+                account: "Tarjeta / cuenta",
+                receiver: "Beneficiario",
+                copyAction: "Copiar",
+                copied: "Copiado",
+                afterPayment: "Después del pago",
+                afterPaymentHint: "Cuando completes la transferencia, envía el comprobante a tu manager en Telegram.",
+                managerButton: "Abrir Telegram",
+                managerUnavailable: "El enlace de Telegram del manager aún no está configurado.",
+                saveRequired: "Guarda tu nombre y apellido para activar las acciones rápidas y el acceso al manager."
+            },
+            it: {
+                loading: "Caricamento",
+                chooseLanguage: "Scegli lingua",
+                defaultLanguage: "Predefinita:",
+                close: "Chiudi",
+                invalidTitle: "Questo link di pagamento è incompleto",
+                invalidText: "Chiedi al tuo manager un link corretto con l'importo già incluso.",
+                bankTransfer: "Bonifico bancario",
+                paymentPurpose: "Causale",
+                timerLabel: "I dati si aggiorneranno tra",
+                timerLive: "Attivo",
+                timerText: "Quando il timer arriva a zero, la pagina si ricarica con i dati aggiornati.",
+                clientSection: "Dati del pagatore",
+                clientTitle: "Inserisci nome e cognome",
+                clientHint: "Questi dati vengono salvati insieme a questa richiesta di pagamento.",
+                firstName: "Nome",
+                lastName: "Cognome",
+                saveClient: "Salva e continua",
+                savingClient: "Salvataggio...",
+                savedClient: "Salvato per questo pagamento",
+                editButton: "Modifica",
+                requiredFields: "Inserisci sia nome che cognome.",
+                saveFailed: "Impossibile salvare i dati. Riprova.",
+                paymentDetails: "Dettagli di pagamento",
+                paymentDetailsTitle: "Effettua il trasferimento con questi dati",
+                paymentDetailsHint: "Copia i dati esattamente come sono mostrati in questa pagina.",
+                bank: "Banca",
+                account: "Carta / conto",
+                receiver: "Beneficiario",
+                copyAction: "Copia",
+                copied: "Copiato",
+                afterPayment: "Dopo il pagamento",
+                afterPaymentHint: "Dopo il bonifico, invia la ricevuta al tuo manager su Telegram.",
+                managerButton: "Apri Telegram",
+                managerUnavailable: "Il link Telegram del manager non è ancora configurato.",
+                saveRequired: "Salva nome e cognome per attivare le azioni rapide e l'accesso al manager."
+            },
+            de: {
+                loading: "Wird geladen",
+                chooseLanguage: "Sprache wählen",
+                defaultLanguage: "Standard:",
+                close: "Schließen",
+                invalidTitle: "Dieser Zahlungslink ist unvollständig",
+                invalidText: "Bitte deinen Manager um einen gültigen Link mit dem bereits eingetragenen Betrag.",
+                bankTransfer: "Banküberweisung",
+                paymentPurpose: "Verwendungszweck",
+                timerLabel: "Daten aktualisieren sich in",
+                timerLive: "Aktiv",
+                timerText: "Wenn der Timer abläuft, lädt die Seite die neuesten Zahlungsdaten neu.",
+                clientSection: "Zahlerdaten",
+                clientTitle: "Vorname und Nachname eingeben",
+                clientHint: "Diese Daten werden zusammen mit dieser Zahlungsanfrage gespeichert.",
+                firstName: "Vorname",
+                lastName: "Nachname",
+                saveClient: "Speichern und fortfahren",
+                savingClient: "Wird gespeichert...",
+                savedClient: "Für diese Zahlung gespeichert",
+                editButton: "Bearbeiten",
+                requiredFields: "Bitte Vorname und Nachname eingeben.",
+                saveFailed: "Deine Daten konnten nicht gespeichert werden. Bitte versuche es erneut.",
+                paymentDetails: "Zahlungsdaten",
+                paymentDetailsTitle: "Überweise mit den folgenden Daten",
+                paymentDetailsHint: "Kopiere die Daten genau so, wie sie auf dieser Seite stehen.",
+                bank: "Bank",
+                account: "Karte / Konto",
+                receiver: "Empfänger",
+                copyAction: "Kopieren",
+                copied: "Kopiert",
+                afterPayment: "Nach der Zahlung",
+                afterPaymentHint: "Sende den Beleg nach der Überweisung an deinen Manager in Telegram.",
+                managerButton: "Telegram öffnen",
+                managerUnavailable: "Der Telegram-Link des Managers ist noch nicht eingerichtet.",
+                saveRequired: "Speichere Vorname und Nachname, um Schnellaktionen und den Manager-Zugang zu aktivieren."
+            },
+            fr: {
+                loading: "Chargement",
+                chooseLanguage: "Choisir la langue",
+                defaultLanguage: "Par défaut :",
+                close: "Fermer",
+                invalidTitle: "Ce lien de paiement est incomplet",
+                invalidText: "Demandez à votre manager un lien valide avec le montant déjà inclus.",
+                bankTransfer: "Virement bancaire",
+                paymentPurpose: "Objet du paiement",
+                timerLabel: "Les coordonnées seront actualisées dans",
+                timerLive: "Actif",
+                timerText: "Quand le minuteur atteint zéro, la page se recharge avec les coordonnées les plus récentes.",
+                clientSection: "Données du payeur",
+                clientTitle: "Saisissez votre prénom et votre nom",
+                clientHint: "Ces données sont enregistrées avec cette demande de paiement.",
+                firstName: "Prénom",
+                lastName: "Nom",
+                saveClient: "Enregistrer et continuer",
+                savingClient: "Enregistrement...",
+                savedClient: "Enregistré pour ce paiement",
+                editButton: "Modifier",
+                requiredFields: "Saisissez le prénom et le nom.",
+                saveFailed: "Impossible d'enregistrer vos données. Veuillez réessayer.",
+                paymentDetails: "Coordonnées de paiement",
+                paymentDetailsTitle: "Effectuez le virement avec les coordonnées ci-dessous",
+                paymentDetailsHint: "Copiez les coordonnées exactement comme elles apparaissent sur cette page.",
+                bank: "Banque",
+                account: "Carte / compte",
+                receiver: "Bénéficiaire",
+                copyAction: "Copier",
+                copied: "Copié",
+                afterPayment: "Après le paiement",
+                afterPaymentHint: "Une fois le virement effectué, envoyez le reçu à votre manager sur Telegram.",
+                managerButton: "Ouvrir Telegram",
+                managerUnavailable: "Le lien Telegram du manager n'est pas encore configuré.",
+                saveRequired: "Enregistrez votre prénom et votre nom pour activer les actions rapides et l'accès au manager."
+            }
+        };
+
+        function landingApp() {
+            return {
+                loading: true,
+                showLanguages: false,
+                currentLang: "en",
+                recommendedLanguage: "en",
+                mode: "invalid",
+                visitor: {},
+                visitToken: "",
+                copyMessage: "",
+                copyTimerId: null,
+                countdownTimerId: null,
+                timeLeftSeconds: 0,
+                availableLanguages: languageCatalog,
+                copy: translations.en,
+                savingClient: false,
+                clientReady: false,
+                editingClient: false,
+                clientError: "",
+                geo: {
+                    geo_code: "ES",
+                    geo_name: "Spain",
+                    default_language: "es",
+                    manager_name: "Manager",
+                    manager_telegram_url: "",
+                    refresh_minutes: 15,
+                    refresh_seconds: 900
+                },
+                requisites: {
+                    bank_name: "Dream Team Pay",
+                    card_number: "0000 0000 0000 0000",
+                    receiver_name: "Payment Operations",
+                    created_at: null
+                },
+                payment: {
+                    amount: null,
+                    currency: "EUR",
+                    label: ""
+                },
+                client: {
+                    first_name: "",
+                    last_name: ""
+                },
+
+                async init() {
+                    const context = await this.fetchContext();
+                    this.mode = context.mode || "invalid";
+                    this.geo = context.geo || this.geo;
+                    this.requisites = context.requisites || this.requisites;
+                    this.payment = context.payment || this.payment;
+                    this.visitor = context.visitor || {};
+                    this.visitToken = String(context.visit?.token || "");
+                    this.availableLanguages = context.available_languages || languageCatalog;
+                    this.recommendedLanguage = this.resolveLanguageCode(context.recommended_language || this.geo.default_language || "en");
+
+                    const queryLang = new URLSearchParams(window.location.search).get("lang");
+                    const storedLang = window.localStorage.getItem("dream-team-language");
+                    this.applyLanguage(this.resolveLanguageCode(queryLang || storedLang || this.recommendedLanguage || "en"));
+
+                    this.restoreClient();
+                    if (this.mode !== "invalid" && this.hasClientName()) {
+                        await this.submitClient(true);
+                    }
+
+                    this.restartCountdown(Number(context.timer?.refresh_seconds || this.geo.refresh_seconds || 0));
+                    this.loading = false;
+
+                    this.$nextTick(() => {
+                        gsap.fromTo("#payment-shell", { opacity: 0, y: 22, scale: 0.99 }, { opacity: 1, y: 0, scale: 1, duration: 0.55, ease: "power2.out" });
+                    });
+                },
+
+                async fetchContext() {
+                    const endpoint = this.apiUrl(`/api/landing-context${window.location.search || ""}`);
+                    try {
+                        const response = await fetch(endpoint);
+                        if (!response.ok) {
+                            throw new Error("Context load failed");
+                        }
+                        return await response.json();
+                    } catch (error) {
+                        return {
+                            mode: "invalid",
+                            recommended_language: "en",
+                            available_languages: languageCatalog,
+                            payment: this.payment,
+                            geo: this.geo,
+                            requisites: this.requisites,
+                            visit: { token: "" },
+                            visitor: {},
+                            timer: { refresh_seconds: 0 }
+                        };
+                    }
+                },
+
+                apiUrl(path) {
+                    return `${APP_BASE_URL}${path}`;
+                },
+
+                resolveLanguageCode(languageCode) {
+                    return translations[languageCode] ? languageCode : "en";
+                },
+
+                applyLanguage(languageCode) {
+                    const safe = this.resolveLanguageCode(languageCode);
+                    this.currentLang = safe;
+                    this.copy = { ...translations.en, ...(translations[safe] || {}) };
+                    document.documentElement.lang = safe;
+                    window.localStorage.setItem("dream-team-language", safe);
+                },
+
+                changeLanguage(languageCode) {
+                    this.applyLanguage(languageCode);
+                    this.showLanguages = false;
+                },
+
+                languageLabel(code) {
+                    const found = this.availableLanguages.find((language) => language.code === code) || languageCatalog.find((language) => language.code === code);
+                    return found ? found.label : "English";
+                },
+
+                restoreClient() {
+                    try {
+                        const raw = window.sessionStorage.getItem(CLIENT_STORAGE_KEY);
+                        if (!raw) {
+                            return;
+                        }
+                        const parsed = JSON.parse(raw);
+                        this.client.first_name = this.normalizeName(parsed.first_name);
+                        this.client.last_name = this.normalizeName(parsed.last_name);
+                    } catch (error) {
+                        this.client.first_name = "";
+                        this.client.last_name = "";
+                    }
+                },
+
+                persistClientLocally() {
+                    window.sessionStorage.setItem(CLIENT_STORAGE_KEY, JSON.stringify({
+                        first_name: this.client.first_name,
+                        last_name: this.client.last_name
+                    }));
+                },
+
+                normalizeName(value) {
+                    return String(value || "").replace(/\s+/g, " ").trim().slice(0, 80);
+                },
+
+                hasClientName() {
+                    return Boolean(this.normalizeName(this.client.first_name) && this.normalizeName(this.client.last_name));
+                },
+
+                async submitClient(silent = false) {
+                    const firstName = this.normalizeName(this.client.first_name);
+                    const lastName = this.normalizeName(this.client.last_name);
+
+                    this.client.first_name = firstName;
+                    this.client.last_name = lastName;
+
+                    if (!firstName || !lastName) {
+                        this.clientReady = false;
+                        if (!silent) {
+                            this.clientError = this.copy.requiredFields;
+                        }
+                        return;
+                    }
+
+                    if (!this.visitToken) {
+                        this.clientReady = false;
+                        if (!silent) {
+                            this.clientError = this.copy.saveFailed;
+                        }
+                        return;
+                    }
+
+                    this.savingClient = true;
+                    this.clientError = "";
+                    try {
+                        const response = await fetch(this.apiUrl("/api/landing-client"), {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                visit_token: this.visitToken,
+                                first_name: firstName,
+                                last_name: lastName
+                            })
+                        });
+
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) {
+                            throw new Error(data.detail || "Save failed");
+                        }
+
+                        this.persistClientLocally();
+                        this.clientReady = true;
+                        this.editingClient = false;
+                    } catch (error) {
+                        this.clientReady = false;
+                        if (!silent) {
+                            this.clientError = error.message || this.copy.saveFailed;
+                        }
+                    } finally {
+                        this.savingClient = false;
+                    }
+                },
+
+                editClient() {
+                    this.clientReady = false;
+                    this.editingClient = true;
+                    this.clientError = "";
+                },
+
+                formattedAmount() {
+                    if (this.payment.amount === null || this.payment.amount === undefined) {
+                        return "—";
+                    }
+                    const locale = localeMap[this.currentLang] || "en-GB";
+                    return new Intl.NumberFormat(locale, {
+                        style: "currency",
+                        currency: this.payment.currency || "EUR",
+                        maximumFractionDigits: 2
+                    }).format(this.payment.amount || 0);
+                },
+
+                showTimer() {
+                    return this.timeLeftSeconds > 0;
+                },
+
+                hasPaymentLabel() {
+                    return Boolean(String(this.payment.label || "").trim());
+                },
+
+                managerUrl() {
+                    return String(this.geo.manager_telegram_url || "").trim();
+                },
+
+                hasManagerLink() {
+                    return Boolean(this.managerUrl());
+                },
+
+                restartCountdown(seconds) {
+                    if (this.countdownTimerId) {
+                        clearInterval(this.countdownTimerId);
+                    }
+                    this.timeLeftSeconds = Math.max(0, Number(seconds || 0));
+                    if (!this.timeLeftSeconds) {
+                        return;
+                    }
+                    this.countdownTimerId = setInterval(() => {
+                        if (this.timeLeftSeconds <= 1) {
+                            clearInterval(this.countdownTimerId);
+                            this.countdownTimerId = null;
+                            window.location.reload();
+                            return;
+                        }
+                        this.timeLeftSeconds -= 1;
+                    }, 1000);
+                },
+
+                formattedCountdown() {
+                    const total = Math.max(0, this.timeLeftSeconds);
+                    const minutes = String(Math.floor(total / 60)).padStart(2, "0");
+                    const seconds = String(total % 60).padStart(2, "0");
+                    return `${minutes}:${seconds}`;
+                },
+
+                async copyText(text) {
+                    const value = String(text || "").trim();
+                    if (!value || !this.clientReady) {
+                        return;
+                    }
+
+                    try {
+                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                            await navigator.clipboard.writeText(value);
+                        } else {
+                            const helper = document.createElement("textarea");
+                            helper.value = value;
+                            helper.setAttribute("readonly", "");
+                            helper.style.position = "absolute";
+                            helper.style.left = "-9999px";
+                            document.body.appendChild(helper);
+                            helper.select();
+                            document.execCommand("copy");
+                            document.body.removeChild(helper);
+                        }
+
+                        this.copyMessage = this.copy.copied;
+                        window.clearTimeout(this.copyTimerId);
+                        this.copyTimerId = window.setTimeout(() => {
+                            this.copyMessage = "";
+                        }, 1600);
+                    } catch (error) {
+                        this.copyMessage = "";
+                    }
+                },
+
+                copyField(value) {
+                    this.copyText(value);
+                }
+            };
+        }
+    </script>
+</body>
+</html>
