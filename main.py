@@ -82,8 +82,11 @@ WAITING_GEO_SELECTION = 1
 WAITING_REQUISITES = 2
 WAITING_MANAGER = 3
 WAITING_LINK_AMOUNT = 4
-WAITING_LINK_LABEL = 5
-WAITING_LINK_COMMENT = 6
+WAITING_LINK_REQUISITES = 5
+WAITING_LINK_MANAGER = 6
+WAITING_LINK_LANGUAGE = 7
+WAITING_LINK_LABEL = 8
+WAITING_LINK_COMMENT = 9
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
@@ -150,6 +153,7 @@ DEFAULT_GEO_CONFIGS = {
         "default_language": "es",
         "manager_name": "Spain manager",
         "manager_telegram_url": "",
+        "default_manager_id": None,
         "refresh_minutes": DEFAULT_REFRESH_MINUTES,
     },
     "IT": {
@@ -157,6 +161,7 @@ DEFAULT_GEO_CONFIGS = {
         "default_language": "it",
         "manager_name": "Italy manager",
         "manager_telegram_url": "",
+        "default_manager_id": None,
         "refresh_minutes": DEFAULT_REFRESH_MINUTES,
     },
     "DE": {
@@ -164,6 +169,7 @@ DEFAULT_GEO_CONFIGS = {
         "default_language": "de",
         "manager_name": "Germany manager",
         "manager_telegram_url": "",
+        "default_manager_id": None,
         "refresh_minutes": DEFAULT_REFRESH_MINUTES,
     },
     "FR": {
@@ -171,6 +177,7 @@ DEFAULT_GEO_CONFIGS = {
         "default_language": "fr",
         "manager_name": "France manager",
         "manager_telegram_url": "",
+        "default_manager_id": None,
         "refresh_minutes": DEFAULT_REFRESH_MINUTES,
     },
 }
@@ -186,13 +193,23 @@ class AdminLoginPayload(BaseModel):
 class GeoConfigPayload(BaseModel):
     geo_name: str
     default_language: str
-    manager_name: str
-    manager_telegram_url: str = ""
     refresh_minutes: int
+    default_manager_id: int | None = None
+
+
+class RequisitesPayload(BaseModel):
     bank_name: str
     card_number: str
     bic_swift: str = ""
     receiver_name: str
+
+
+class ManagerPayload(BaseModel):
+    manager_id: int | None = None
+    geo_code: str
+    manager_name: str
+    manager_telegram_url: str = ""
+    make_default: bool = False
 
 
 class LandingClientPayload(BaseModel):
@@ -306,9 +323,9 @@ def normalize_manager_link(raw_value: str | None) -> str:
     return value
 
 
-def has_manager_contact(geo_code: str) -> bool:
-    profile = get_geo_profile(geo_code)
-    return bool(normalize_manager_link(profile.get("manager_telegram_url")))
+def has_manager_contact(geo_code: str, manager_id: int | None = None) -> bool:
+    manager = resolve_manager_for_geo(geo_code, manager_id)
+    return bool(normalize_manager_link(manager.get("manager_telegram_url")))
 
 
 def clean_payment_comment(raw_value: str | None) -> str:
@@ -342,9 +359,10 @@ def build_payment_link(
     comment: str = "",
     forced_language: str | None = None,
     requisites_id: int | None = None,
+    manager_id: int | None = None,
 ) -> str:
     safe_geo = sanitize_geo_code(geo_code) or "ES"
-    if not has_manager_contact(safe_geo):
+    if not has_manager_contact(safe_geo, manager_id):
         raise HTTPException(status_code=400, detail=f"Для GEO {safe_geo} не задан контакт менеджера")
     params = {
         "payment": format_query_amount(amount),
@@ -361,6 +379,8 @@ def build_payment_link(
         params["lang"] = safe_language
     if requisites_id is not None and requisites_id > 0:
         params["req"] = str(requisites_id)
+    if manager_id is not None and manager_id > 0:
+        params["mgr"] = str(manager_id)
     return f"{WEB_URL}/?{urlencode(params)}"
 
 
@@ -435,9 +455,9 @@ def seed_geo_data(conn: sqlite3.Connection) -> None:
             """
             INSERT OR IGNORE INTO geo_profiles (
                 geo_code, geo_name, default_language, manager_name, manager_telegram_url,
-                refresh_minutes, updated_at
+                default_manager_id, refresh_minutes, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 geo_code,
@@ -445,6 +465,7 @@ def seed_geo_data(conn: sqlite3.Connection) -> None:
                 config["default_language"],
                 config["manager_name"],
                 config["manager_telegram_url"],
+                config["default_manager_id"],
                 config["refresh_minutes"],
                 now_value,
             ),
@@ -469,6 +490,64 @@ def seed_geo_data(conn: sqlite3.Connection) -> None:
                     now_value,
                 ),
             )
+
+
+def migrate_legacy_geo_managers(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT geo_code, manager_name, manager_telegram_url, default_manager_id
+        FROM geo_profiles
+        """
+    ).fetchall()
+    for row in rows:
+        geo_code = sanitize_geo_code(row["geo_code"]) or "ES"
+        if row["default_manager_id"]:
+            manager = conn.execute(
+                """
+                SELECT id
+                FROM geo_managers
+                WHERE id = ? AND geo_code = ?
+                LIMIT 1
+                """,
+                (row["default_manager_id"], geo_code),
+            ).fetchone()
+            if manager is not None:
+                continue
+
+        manager_name = (row["manager_name"] or "").strip()
+        manager_url = normalize_manager_link(row["manager_telegram_url"])
+        if not manager_name and not manager_url:
+            continue
+
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM geo_managers
+            WHERE geo_code = ? AND manager_name = ? AND COALESCE(manager_telegram_url, '') = ?
+            LIMIT 1
+            """,
+            (geo_code, manager_name, manager_url),
+        ).fetchone()
+        if existing is None:
+            cursor = conn.execute(
+                """
+                INSERT INTO geo_managers (geo_code, manager_name, manager_telegram_url, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (geo_code, manager_name or f"{geo_code} manager", manager_url, utc_now_iso(), utc_now_iso()),
+            )
+            manager_id = int(cursor.lastrowid)
+        else:
+            manager_id = int(existing["id"])
+
+        conn.execute(
+            """
+            UPDATE geo_profiles
+            SET default_manager_id = ?, updated_at = COALESCE(updated_at, ?)
+            WHERE geo_code = ?
+            """,
+            (manager_id, utc_now_iso(), geo_code),
+        )
 
 
 def seed_bot_admins(conn: sqlite3.Connection) -> None:
@@ -503,6 +582,7 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS bot_admin_preferences (
             user_id INTEGER PRIMARY KEY,
             selected_geo TEXT,
+            selected_manager_id INTEGER,
             updated_at TEXT
         )
         """
@@ -515,9 +595,28 @@ def init_db() -> None:
             default_language TEXT NOT NULL,
             manager_name TEXT NOT NULL,
             manager_telegram_url TEXT,
+            default_manager_id INTEGER,
             refresh_minutes INTEGER NOT NULL DEFAULT 15,
             updated_at TEXT
         )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS geo_managers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            geo_code TEXT NOT NULL,
+            manager_name TEXT NOT NULL,
+            manager_telegram_url TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_geo_managers_lookup
+        ON geo_managers (geo_code, id DESC)
         """
     )
     conn.execute(
@@ -587,13 +686,18 @@ def init_db() -> None:
     ensure_column(conn, "visits", "client_last_name", "TEXT")
     ensure_column(conn, "visits", "client_saved_at", "TEXT")
     ensure_column(conn, "visits", "requisites_id", "INTEGER")
+    ensure_column(conn, "visits", "manager_id", "INTEGER")
+    ensure_column(conn, "visits", "snapshot_manager_name", "TEXT")
+    ensure_column(conn, "visits", "snapshot_manager_telegram_url", "TEXT")
     ensure_column(conn, "visits", "snapshot_bank_name", "TEXT")
     ensure_column(conn, "visits", "snapshot_card_number", "TEXT")
     ensure_column(conn, "visits", "snapshot_bic_swift", "TEXT")
     ensure_column(conn, "visits", "snapshot_receiver_name", "TEXT")
     ensure_column(conn, "visits", "payment_comment", "TEXT")
     ensure_column(conn, "bot_admins", "role", "TEXT NOT NULL DEFAULT 'admin'")
+    ensure_column(conn, "bot_admin_preferences", "selected_manager_id", "INTEGER")
     ensure_column(conn, "geo_requisites", "bic_swift", "TEXT DEFAULT ''")
+    ensure_column(conn, "geo_profiles", "default_manager_id", "INTEGER")
     ensure_column(conn, "bot_activity_log", "actor_role", "TEXT")
     ensure_column(conn, "bot_activity_log", "geo_code", "TEXT")
     ensure_column(conn, "bot_activity_log", "target_user_id", "INTEGER")
@@ -613,6 +717,7 @@ def init_db() -> None:
     )
     seed_bot_admins(conn)
     seed_geo_data(conn)
+    migrate_legacy_geo_managers(conn)
     conn.commit()
     conn.close()
 
@@ -624,7 +729,7 @@ def get_geo_profile(geo_code: str) -> dict[str, Any]:
         """
         SELECT
             geo_code, geo_name, default_language, manager_name, manager_telegram_url,
-            refresh_minutes, updated_at
+            default_manager_id, refresh_minutes, updated_at
         FROM geo_profiles
         WHERE geo_code = ?
         """,
@@ -641,6 +746,7 @@ def get_geo_profile(geo_code: str) -> dict[str, Any]:
         "default_language": fallback["default_language"],
         "manager_name": fallback["manager_name"],
         "manager_telegram_url": fallback["manager_telegram_url"],
+        "default_manager_id": fallback["default_manager_id"],
         "refresh_minutes": fallback["refresh_minutes"],
         "updated_at": utc_now_iso(),
     }
@@ -652,7 +758,7 @@ def list_geo_profiles() -> list[dict[str, Any]]:
         """
         SELECT
             geo_code, geo_name, default_language, manager_name, manager_telegram_url,
-            refresh_minutes, updated_at
+            default_manager_id, refresh_minutes, updated_at
         FROM geo_profiles
         ORDER BY geo_code ASC
         """
@@ -660,6 +766,163 @@ def list_geo_profiles() -> list[dict[str, Any]]:
     conn.close()
     profiles_by_code = {row["geo_code"]: dict(row) for row in rows}
     return [profiles_by_code.get(geo_code, get_geo_profile(geo_code)) for geo_code in SUPPORTED_GEOS]
+
+
+def get_geo_manager_by_id(geo_code: str, manager_id: int | None) -> dict[str, Any] | None:
+    safe_geo = sanitize_geo_code(geo_code) or "ES"
+    if manager_id is None or manager_id <= 0:
+        return None
+    conn = get_connection()
+    row = conn.execute(
+        """
+        SELECT id, geo_code, manager_name, manager_telegram_url, created_at, updated_at
+        FROM geo_managers
+        WHERE geo_code = ? AND id = ?
+        LIMIT 1
+        """,
+        (safe_geo, manager_id),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row is not None else None
+
+
+def list_geo_managers(geo_code: str | None = None) -> list[dict[str, Any]]:
+    conn = get_connection()
+    if geo_code:
+        safe_geo = sanitize_geo_code(geo_code) or "ES"
+        rows = conn.execute(
+            """
+            SELECT id, geo_code, manager_name, manager_telegram_url, created_at, updated_at
+            FROM geo_managers
+            WHERE geo_code = ?
+            ORDER BY id DESC
+            """,
+            (safe_geo,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT id, geo_code, manager_name, manager_telegram_url, created_at, updated_at
+            FROM geo_managers
+            ORDER BY geo_code ASC, id DESC
+            """
+        ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_default_manager_for_geo(geo_code: str) -> dict[str, Any] | None:
+    profile = get_geo_profile(geo_code)
+    manager_id = profile.get("default_manager_id")
+    manager = get_geo_manager_by_id(geo_code, int(manager_id)) if manager_id else None
+    if manager is not None:
+        return manager
+    managers = list_geo_managers(geo_code)
+    return managers[0] if managers else None
+
+
+def resolve_manager_for_geo(geo_code: str, manager_id: int | None = None) -> dict[str, Any]:
+    safe_geo = sanitize_geo_code(geo_code) or "ES"
+    chosen = get_geo_manager_by_id(safe_geo, manager_id)
+    if chosen is not None:
+        return chosen
+    fallback = get_default_manager_for_geo(safe_geo)
+    if fallback is not None:
+        return fallback
+    return {
+        "id": None,
+        "geo_code": safe_geo,
+        "manager_name": "",
+        "manager_telegram_url": "",
+        "created_at": None,
+        "updated_at": None,
+    }
+
+
+def set_geo_default_manager(geo_code: str, manager_id: int | None) -> dict[str, Any]:
+    safe_geo = sanitize_geo_code(geo_code) or "ES"
+    manager = get_geo_manager_by_id(safe_geo, manager_id) if manager_id else None
+    conn = get_connection()
+    conn.execute(
+        """
+        UPDATE geo_profiles
+        SET default_manager_id = ?, updated_at = ?
+        WHERE geo_code = ?
+        """,
+        (manager["id"] if manager else None, utc_now_iso(), safe_geo),
+    )
+    conn.commit()
+    conn.close()
+    return get_geo_profile(safe_geo)
+
+
+def save_geo_manager(payload: ManagerPayload) -> dict[str, Any]:
+    safe_geo = sanitize_geo_code(payload.geo_code)
+    if not safe_geo:
+        raise HTTPException(status_code=400, detail="Неподдерживаемый GEO для менеджера")
+
+    clean_name = payload.manager_name.strip()
+    clean_url = normalize_manager_link(payload.manager_telegram_url)
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Имя менеджера обязательно")
+    if not clean_url:
+        raise HTTPException(status_code=400, detail="Нужна Telegram-ссылка менеджера")
+
+    manager_id = payload.manager_id if payload.manager_id and payload.manager_id > 0 else None
+    conn = get_connection()
+    if manager_id:
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM geo_managers
+            WHERE id = ? AND geo_code = ?
+            LIMIT 1
+            """,
+            (manager_id, safe_geo),
+        ).fetchone()
+        if existing is None:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Менеджер не найден")
+        conn.execute(
+            """
+            UPDATE geo_managers
+            SET manager_name = ?, manager_telegram_url = ?, updated_at = ?
+            WHERE id = ? AND geo_code = ?
+            """,
+            (clean_name, clean_url, utc_now_iso(), manager_id, safe_geo),
+        )
+        saved_manager_id = manager_id
+    else:
+        cursor = conn.execute(
+            """
+            INSERT INTO geo_managers (geo_code, manager_name, manager_telegram_url, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (safe_geo, clean_name, clean_url, utc_now_iso(), utc_now_iso()),
+        )
+        saved_manager_id = int(cursor.lastrowid)
+
+    current_default = conn.execute(
+        """
+        SELECT default_manager_id
+        FROM geo_profiles
+        WHERE geo_code = ?
+        LIMIT 1
+        """,
+        (safe_geo,),
+    ).fetchone()
+    if payload.make_default or not (current_default and current_default["default_manager_id"]):
+        conn.execute(
+            """
+            UPDATE geo_profiles
+            SET default_manager_id = ?, updated_at = ?
+            WHERE geo_code = ?
+            """,
+            (saved_manager_id, utc_now_iso(), safe_geo),
+        )
+    conn.commit()
+    conn.close()
+    return resolve_manager_for_geo(safe_geo, saved_manager_id)
 
 
 def get_active_requisites(geo_code: str) -> dict[str, Any]:
@@ -723,6 +986,8 @@ def list_geo_snapshots() -> list[dict[str, Any]]:
         {
             "profile": get_geo_profile(geo_code),
             "active_requisites": get_active_requisites(geo_code),
+            "default_manager": get_default_manager_for_geo(geo_code),
+            "managers": list_geo_managers(geo_code),
         }
         for geo_code in SUPPORTED_GEOS
     ]
@@ -767,18 +1032,12 @@ def save_geo_configuration(geo_code: str, payload: GeoConfigPayload) -> dict[str
 
     geo_name = payload.geo_name.strip() or DEFAULT_GEO_CONFIGS[safe_geo]["geo_name"]
     default_language = sanitize_language_code(payload.default_language) or DEFAULT_GEO_CONFIGS[safe_geo]["default_language"]
-    manager_name = payload.manager_name.strip() or DEFAULT_GEO_CONFIGS[safe_geo]["manager_name"]
-    manager_telegram_url = payload.manager_telegram_url.strip()
     refresh_minutes = int(payload.refresh_minutes)
-    bank_name = payload.bank_name.strip()
-    card_number = payload.card_number.strip()
-    bic_swift = payload.bic_swift.strip()
-    receiver_name = payload.receiver_name.strip()
-
-    if not bank_name or not card_number or not receiver_name:
-        raise HTTPException(status_code=400, detail="Реквизиты должны быть заполнены полностью")
     if refresh_minutes < 1 or refresh_minutes > 120:
         raise HTTPException(status_code=400, detail="Таймер должен быть от 1 до 120 минут")
+    default_manager_id = payload.default_manager_id if payload.default_manager_id and payload.default_manager_id > 0 else None
+    if default_manager_id and get_geo_manager_by_id(safe_geo, default_manager_id) is None:
+        raise HTTPException(status_code=400, detail="Менеджер по умолчанию не найден для выбранного GEO")
 
     conn = get_connection()
     conn.execute(
@@ -787,8 +1046,7 @@ def save_geo_configuration(geo_code: str, payload: GeoConfigPayload) -> dict[str
         SET
             geo_name = ?,
             default_language = ?,
-            manager_name = ?,
-            manager_telegram_url = ?,
+            default_manager_id = ?,
             refresh_minutes = ?,
             updated_at = ?
         WHERE geo_code = ?
@@ -796,44 +1054,19 @@ def save_geo_configuration(geo_code: str, payload: GeoConfigPayload) -> dict[str
         (
             geo_name,
             default_language,
-            manager_name,
-            manager_telegram_url,
+            default_manager_id,
             refresh_minutes,
             utc_now_iso(),
             safe_geo,
         ),
     )
-
-    current_requisites = conn.execute(
-        """
-        SELECT bank_name, card_number, bic_swift, receiver_name
-        FROM geo_requisites
-        WHERE geo_code = ?
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        (safe_geo,),
-    ).fetchone()
-    if (
-        current_requisites is None
-        or current_requisites["bank_name"] != bank_name
-        or current_requisites["card_number"] != card_number
-        or (current_requisites["bic_swift"] or "") != bic_swift
-        or current_requisites["receiver_name"] != receiver_name
-    ):
-        conn.execute(
-            """
-            INSERT INTO geo_requisites (geo_code, bank_name, card_number, bic_swift, receiver_name, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (safe_geo, bank_name, card_number, bic_swift, receiver_name, utc_now_iso()),
-        )
-
     conn.commit()
     conn.close()
     return {
         "profile": get_geo_profile(safe_geo),
         "active_requisites": get_active_requisites(safe_geo),
+        "default_manager": get_default_manager_for_geo(safe_geo),
+        "managers": list_geo_managers(safe_geo),
     }
 
 
@@ -867,20 +1100,17 @@ def update_geo_requisites(
 
 def update_geo_manager(geo_code: str, manager_name: str, manager_telegram_url: str) -> dict[str, Any]:
     safe_geo = sanitize_geo_code(geo_code) or "ES"
-    clean_name = manager_name.strip() or DEFAULT_GEO_CONFIGS[safe_geo]["manager_name"]
-    clean_url = normalize_manager_link(manager_telegram_url)
-    conn = get_connection()
-    conn.execute(
-        """
-        UPDATE geo_profiles
-        SET manager_name = ?, manager_telegram_url = ?, updated_at = ?
-        WHERE geo_code = ?
-        """,
-        (clean_name, clean_url, utc_now_iso(), safe_geo),
+    default_manager = get_default_manager_for_geo(safe_geo)
+    saved_manager = save_geo_manager(
+        ManagerPayload(
+            manager_id=default_manager["id"] if default_manager and default_manager.get("id") else None,
+            geo_code=safe_geo,
+            manager_name=manager_name.strip() or DEFAULT_GEO_CONFIGS[safe_geo]["manager_name"],
+            manager_telegram_url=manager_telegram_url,
+            make_default=True,
+        )
     )
-    conn.commit()
-    conn.close()
-    return get_geo_profile(safe_geo)
+    return saved_manager
 
 
 def record_visit(
@@ -891,6 +1121,7 @@ def record_visit(
     payment_amount: float | None,
     payment_label: str | None,
     payment_comment: str | None,
+    manager: dict[str, Any] | None,
     requisites: dict[str, Any] | None,
     request: Request,
 ) -> str:
@@ -902,10 +1133,11 @@ def record_visit(
             mode, ip_address, country_code, country_name, city, region, timezone, currency,
             user_agent, accept_language, recommended_language, geo_code, payment_amount,
             payment_label, referrer, page_path, query_string, created_at, visit_token,
-            client_first_name, client_last_name, client_saved_at, requisites_id,
+            client_first_name, client_last_name, client_saved_at, requisites_id, manager_id,
+            snapshot_manager_name, snapshot_manager_telegram_url,
             snapshot_bank_name, snapshot_card_number, snapshot_bic_swift, snapshot_receiver_name, payment_comment
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             mode,
@@ -931,6 +1163,9 @@ def record_visit(
             None,
             None,
             requisites.get("id") if requisites else None,
+            manager.get("id") if manager else None,
+            manager.get("manager_name") if manager else None,
+            manager.get("manager_telegram_url") if manager else None,
             requisites.get("bank_name") if requisites else None,
             requisites.get("card_number") if requisites else None,
             requisites.get("bic_swift") if requisites else None,
@@ -951,8 +1186,9 @@ def list_visits(limit: int = 120) -> list[dict[str, Any]]:
             id, mode, ip_address, country_code, country_name, city, region, timezone,
             currency, user_agent, accept_language, recommended_language, geo_code,
             payment_amount, payment_label, referrer, page_path, query_string, created_at,
-            visit_token, client_first_name, client_last_name, client_saved_at,
-            requisites_id, snapshot_bank_name, snapshot_card_number, snapshot_bic_swift, snapshot_receiver_name,
+            visit_token, client_first_name, client_last_name, client_saved_at, manager_id,
+            snapshot_manager_name, snapshot_manager_telegram_url, requisites_id,
+            snapshot_bank_name, snapshot_card_number, snapshot_bic_swift, snapshot_receiver_name,
             payment_comment
         FROM visits
         ORDER BY id DESC
@@ -1382,8 +1618,9 @@ def get_summary_stats() -> dict[str, Any]:
     manager_links_configured = conn.execute(
         """
         SELECT COUNT(*) AS value
-        FROM geo_profiles
-        WHERE manager_telegram_url IS NOT NULL AND TRIM(manager_telegram_url) != ''
+        FROM geo_profiles gp
+        JOIN geo_managers gm ON gm.id = gp.default_manager_id
+        WHERE gm.manager_telegram_url IS NOT NULL AND TRIM(gm.manager_telegram_url) != ''
         """
     ).fetchone()["value"]
 
@@ -1662,12 +1899,14 @@ def get_selected_geo(context: ContextTypes.DEFAULT_TYPE, user_id: int | None = N
 
 def main_keyboard(role: str | None) -> ReplyKeyboardMarkup:
     safe_role = sanitize_bot_role(role, "handler")
-    rows: list[list[str]] = [["🗺 Выбрать GEO", "📊 GEO статус"]]
+    rows: list[list[str]] = [["🗺 Выбрать GEO", "📊 Активные реквизиты"]]
     if bot_role_has_permission(safe_role, "edit_requisites"):
         rows.append(["📝 Реквизиты", "🗂 История реквизитов"])
         rows.append(["🗑 Удалить реквизит"])
-    if bot_role_has_permission(safe_role, "manage_access"):
+    if bot_role_has_permission(safe_role, "edit_manager"):
         rows.append(["👤 Менеджер", "👥 Права доступа"])
+    elif bot_role_has_permission(safe_role, "manage_access"):
+        rows.append(["👥 Права доступа"])
     if bot_role_has_permission(safe_role, "create_link"):
         rows.append(["🔗 Ссылка на оплату"])
     if bot_role_has_permission(safe_role, "open_admin_panel"):
@@ -1686,12 +1925,14 @@ def geo_picker_keyboard() -> ReplyKeyboardMarkup:
 def build_geo_details_text(geo_code: str) -> str:
     profile = get_geo_profile(geo_code)
     requisites = get_active_requisites(geo_code)
-    manager_link = profile["manager_telegram_url"] or "не указан"
+    manager = get_default_manager_for_geo(geo_code)
+    manager_name = manager["manager_name"] if manager and manager.get("manager_name") else "не задан"
+    manager_link = manager["manager_telegram_url"] if manager and manager.get("manager_telegram_url") else "не указан"
     return (
         f"GEO: {profile['geo_code']} ({profile['geo_name']})\n"
         f"Язык по умолчанию: {profile['default_language']}\n"
         f"Таймер: {profile['refresh_minutes']} мин\n"
-        f"Менеджер: {profile['manager_name']}\n"
+        f"Менеджер по умолчанию: {manager_name}\n"
         f"Telegram: {manager_link}\n\n"
         f"Банк: {requisites['bank_name']}\n"
         f"IBAN: {requisites['card_number']}\n"
@@ -1701,11 +1942,12 @@ def build_geo_details_text(geo_code: str) -> str:
 
 
 def build_geo_overview_text() -> str:
-    blocks = ["Активные GEO-конфигурации:"]
+    blocks = ["Активные реквизиты по GEO:"]
     for snapshot in list_geo_snapshots():
         profile = snapshot["profile"]
         requisites = snapshot["active_requisites"]
-        manager_status = "есть ссылка" if profile["manager_telegram_url"] else "ссылка не задана"
+        manager = snapshot.get("default_manager") or {}
+        manager_status = manager.get("manager_name") or "менеджер не задан"
         blocks.append(
             f"\n{profile['geo_code']} | {profile['geo_name']} | {profile['default_language']} | "
             f"таймер {profile['refresh_minutes']} мин | менеджер: {manager_status}\n"
@@ -1749,8 +1991,10 @@ def build_help_text(role: str | None, geo_code: str) -> str:
     if bot_role_has_permission(safe_role, "edit_requisites"):
         lines.append("3. Для реквизитов нажмите `📝 Реквизиты`.")
         lines.append("4. История реквизитов открывается кнопкой `🗂 История реквизитов`.")
+    if bot_role_has_permission(safe_role, "edit_manager"):
+        lines.append("5. Для менеджера по умолчанию нажмите `👤 Менеджер`.")
     if bot_role_has_permission(safe_role, "manage_access"):
-        lines.append("5. Права доступа смотрите в `👥 Права доступа`.")
+        lines.append("6. Права доступа смотрите в `👥 Права доступа`.")
     return "\n".join(lines)
 
 
@@ -1778,6 +2022,51 @@ def build_requisites_history_text(geo_code: str, action: str = "restore") -> str
             f"{item['receiver_name']} | {item['created_at']}"
         )
     return "\n".join(lines)
+
+
+def build_link_requisites_selection_text(geo_code: str) -> str:
+    items = list_geo_requisites_history_for_geo(geo_code)
+    lines = [
+        f"Текущий GEO: {geo_code}",
+        "Выберите реквизиты для ссылки.",
+        "Отправьте `latest` или `-`, чтобы взять текущие активные.",
+        "",
+    ]
+    for item in items:
+        lines.append(
+            f"ID {item['id']} | {item['bank_name']} | {item['card_number']} | {item['bic_swift'] or 'без BIC/SWIFT'}"
+        )
+    return "\n".join(lines)
+
+
+def build_link_manager_selection_text(geo_code: str) -> str:
+    default_manager = get_default_manager_for_geo(geo_code)
+    items = list_geo_managers(geo_code)
+    lines = [
+        f"Текущий GEO: {geo_code}",
+        "Выберите менеджера для ссылки.",
+        "Отправьте `default` или `-`, чтобы взять менеджера GEO по умолчанию.",
+    ]
+    if default_manager and default_manager.get("id"):
+        lines.append(
+            f"По умолчанию: ID {default_manager['id']} | {default_manager['manager_name']} | "
+            f"{default_manager['manager_telegram_url'] or 'без ссылки'}"
+        )
+    lines.append("")
+    for item in items:
+        lines.append(
+            f"ID {item['id']} | {item['manager_name']} | {item['manager_telegram_url'] or 'без ссылки'}"
+        )
+    return "\n".join(lines)
+
+
+def build_link_language_selection_text() -> str:
+    options = ", ".join(item["code"] for item in LANGUAGE_OPTIONS)
+    return (
+        "Выберите язык лендинга.\n"
+        "Отправьте `auto` или `-`, чтобы оставить автоопределение.\n"
+        f"Доступно: {options}"
+    )
 
 
 def requisites_history_keyboard(geo_code: str, action: str = "restore") -> InlineKeyboardMarkup:
@@ -2192,15 +2481,14 @@ async def change_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
         return ConversationHandler.END
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
-    profile = get_geo_profile(selected_geo)
+    manager = get_default_manager_for_geo(selected_geo) or {}
     await update.effective_message.reply_text(
         f"Текущий GEO: {selected_geo}\n"
-        f"Менеджер: {profile['manager_name']}\n"
-        f"Telegram: {profile['manager_telegram_url'] or 'не указан'}\n\n"
+        f"Менеджер по умолчанию: {manager.get('manager_name') or 'не задан'}\n"
+        f"Telegram: {manager.get('manager_telegram_url') or 'не указан'}\n\n"
         "Отправьте две строки:\n"
         "Имя менеджера\n"
-        "Telegram-ссылка менеджера\n\n"
-        "Чтобы очистить ссылку, отправьте во второй строке знак -"
+        "Telegram-ссылка менеджера"
     )
     return WAITING_MANAGER
 
@@ -2211,13 +2499,14 @@ async def change_manager_save(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.effective_message.reply_text("Нужно 2 строки: имя менеджера и Telegram-ссылка.")
         return WAITING_MANAGER
 
-    manager_link = normalize_manager_link("" if lines[1] == "-" else lines[1])
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
-    update_geo_manager(selected_geo, lines[0], manager_link)
+    saved_manager = update_geo_manager(selected_geo, lines[0], lines[1])
     log_bot_activity(user_id, "update_manager", geo_code=selected_geo, payload=lines[0])
     await update.effective_message.reply_text(
-        f"Менеджер для {selected_geo} обновлен.\n\n{build_geo_details_text(selected_geo)}",
+        f"Менеджер для {selected_geo} обновлен.\n\n"
+        f"ID: {saved_manager.get('id')}\n"
+        f"{build_geo_details_text(selected_geo)}",
         reply_markup=main_keyboard(get_bot_user_role(user_id)),
     )
     return ConversationHandler.END
@@ -2228,6 +2517,11 @@ async def create_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return ConversationHandler.END
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
+    context.user_data.pop("temp_amount", None)
+    context.user_data.pop("temp_requisites_id", None)
+    context.user_data.pop("temp_manager_id", None)
+    context.user_data.pop("temp_language", None)
+    context.user_data.pop("temp_label", None)
     await update.effective_message.reply_text(
         f"Текущий GEO: {selected_geo}\nВведите сумму к оплате, например: 250"
     )
@@ -2240,7 +2534,56 @@ async def create_link_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.effective_message.reply_text("Нужно ввести положительную сумму, например: 250")
         return WAITING_LINK_AMOUNT
 
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
     context.user_data["temp_amount"] = amount
+    await update.effective_message.reply_text(build_link_requisites_selection_text(selected_geo))
+    return WAITING_LINK_REQUISITES
+
+
+async def create_link_requisites(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    raw_value = update.effective_message.text.strip().lower()
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
+    requisites_id: int | None = None
+    if raw_value not in {"-", "latest"}:
+        requisites_id = parse_optional_int(raw_value)
+        if requisites_id is None or get_geo_requisites_by_id(selected_geo, requisites_id) is None:
+            await update.effective_message.reply_text("Нужен `latest` или корректный ID реквизитов.")
+            return WAITING_LINK_REQUISITES
+
+    context.user_data["temp_requisites_id"] = requisites_id
+    await update.effective_message.reply_text(build_link_manager_selection_text(selected_geo))
+    return WAITING_LINK_MANAGER
+
+
+async def create_link_manager(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    raw_value = update.effective_message.text.strip().lower()
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
+    manager_id: int | None = None
+    if raw_value not in {"-", "default"}:
+        manager_id = parse_optional_int(raw_value)
+        if manager_id is None or get_geo_manager_by_id(selected_geo, manager_id) is None:
+            await update.effective_message.reply_text("Нужен `default` или корректный ID менеджера.")
+            return WAITING_LINK_MANAGER
+
+    context.user_data["temp_manager_id"] = manager_id
+    await update.effective_message.reply_text(build_link_language_selection_text())
+    return WAITING_LINK_LANGUAGE
+
+
+async def create_link_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    raw_value = update.effective_message.text.strip().lower()
+    safe_language: str | None = None
+    if raw_value not in {"-", "auto"}:
+        safe_language = sanitize_language_code(raw_value)
+        if not safe_language:
+            available = ", ".join(item["code"] for item in LANGUAGE_OPTIONS)
+            await update.effective_message.reply_text(f"Нужен `auto` или один из кодов: {available}")
+            return WAITING_LINK_LANGUAGE
+
+    context.user_data["temp_language"] = safe_language
     await update.effective_message.reply_text(
         "Введите назначение платежа или отправьте - если оно не нужно."
     )
@@ -2267,27 +2610,44 @@ async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE
     amount = float(context.user_data.get("temp_amount", 0))
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
+    requisites_id = context.user_data.get("temp_requisites_id")
+    manager_id = context.user_data.get("temp_manager_id")
+    forced_language = context.user_data.get("temp_language")
     clean_label = str(context.user_data.get("temp_label", ""))
     comment = update.effective_message.text.strip()
     clean_comment = "" if comment == "-" else clean_payment_comment(comment)
     try:
-        link = build_payment_link(amount, selected_geo, clean_label, clean_comment)
+        link = build_payment_link(
+            amount,
+            selected_geo,
+            clean_label,
+            clean_comment,
+            forced_language=forced_language,
+            requisites_id=requisites_id,
+            manager_id=manager_id,
+        )
     except HTTPException as exc:
         await update.effective_message.reply_text(
             str(exc.detail),
             reply_markup=main_keyboard(get_bot_user_role(user_id)),
         )
         return ConversationHandler.END
+    manager = resolve_manager_for_geo(selected_geo, manager_id)
     context.user_data.pop("temp_amount", None)
+    context.user_data.pop("temp_requisites_id", None)
+    context.user_data.pop("temp_manager_id", None)
+    context.user_data.pop("temp_language", None)
     context.user_data.pop("temp_label", None)
     log_bot_activity(user_id, "create_link", geo_code=selected_geo, payload=f"{amount:.2f}")
     await update.effective_message.reply_text(
         f"Ссылка готова.\n\n"
         f"GEO: {selected_geo}\n"
         f"Сумма: {amount:.2f} {DEFAULT_CURRENCY}\n"
+        f"Реквизиты: {requisites_id or 'latest'}\n"
+        f"Менеджер: {manager.get('manager_name') or 'default'}\n"
         f"Назначение: {clean_label or 'не указано'}\n"
         f"Комментарий: {clean_comment or 'не указан'}\n"
-        "Язык: авто по устройству / IP\n"
+        f"Язык: {forced_language or 'auto'}\n"
         f"Ссылка: {link}",
         reply_markup=main_keyboard(get_bot_user_role(user_id)),
     )
@@ -2323,6 +2683,9 @@ if bot_app is not None:
         entry_points=[MessageHandler(filters.Regex("^🔗 Ссылка на оплату$"), create_link_start)],
         states={
             WAITING_LINK_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_link_amount)],
+            WAITING_LINK_REQUISITES: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_link_requisites)],
+            WAITING_LINK_MANAGER: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_link_manager)],
+            WAITING_LINK_LANGUAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_link_language)],
             WAITING_LINK_LABEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_link_label)],
             WAITING_LINK_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_link_comment)],
         },
@@ -2337,7 +2700,7 @@ if bot_app is not None:
     bot_app.add_handler(CommandHandler("removeadmin", remove_admin_cmd))
     bot_app.add_handler(CommandHandler("adminpanel", show_admin_panel_cmd))
     bot_app.add_handler(CommandHandler("reqhistory", show_requisites_history_start))
-    bot_app.add_handler(MessageHandler(filters.Regex("^📊 GEO статус$"), show_geo_status_cmd))
+    bot_app.add_handler(MessageHandler(filters.Regex("^(📊 GEO статус|📊 Активные реквизиты)$"), show_geo_status_cmd))
     bot_app.add_handler(MessageHandler(filters.Regex("^👥 Права доступа$"), show_admins_cmd))
     bot_app.add_handler(MessageHandler(filters.Regex("^ℹ️ Помощь$"), help_cmd))
     bot_app.add_handler(MessageHandler(filters.Regex("^🗂 История реквизитов$"), show_requisites_history_start))
@@ -2419,6 +2782,7 @@ async def landing_context(
     payment: str | None = None,
     geo: str | None = None,
     req: int | None = None,
+    mgr: int | None = None,
     lang: str | None = None,
     label: str | None = None,
     comment: str | None = None,
@@ -2426,11 +2790,12 @@ async def landing_context(
     visitor, browser_language = await build_visitor_context(request)
     resolved_geo = resolve_geo_code(geo, visitor.get("country_code"), browser_language)
     profile = get_geo_profile(resolved_geo)
+    manager = resolve_manager_for_geo(resolved_geo, mgr)
     payment_amount = parse_payment_amount(payment)
     payment_label = (label or "").strip()
     mode = "live" if payment_amount is not None else ("preview" if ALLOW_PREVIEW_MODE else "invalid")
     invalid_reason = ""
-    if mode != "invalid" and not normalize_manager_link(profile.get("manager_telegram_url")):
+    if mode != "invalid" and not normalize_manager_link(manager.get("manager_telegram_url")):
         mode = "invalid"
         invalid_reason = "manager_missing"
     requisites = resolve_requisites_for_geo(resolved_geo, req) if mode != "invalid" else None
@@ -2451,6 +2816,7 @@ async def landing_context(
         payment_amount=payment_amount,
         payment_label=payment_label or None,
         payment_comment=payment_comment or None,
+        manager=manager,
         requisites=requisites,
         request=request,
     )
@@ -2470,6 +2836,7 @@ async def landing_context(
             **profile,
             "refresh_seconds": refresh_seconds,
         },
+        "manager": manager,
         "requisites": requisites,
         "visit": {
             "token": visit_token,
@@ -2557,6 +2924,7 @@ async def admin_dashboard(request: Request):
         "bot_activity": list_bot_activity(),
         "stats": get_summary_stats(),
         "geos": list_geo_snapshots(),
+        "managers": list_geo_managers(),
         "requisites_history": list_geo_requisites_history(),
         "visits": list_visits(),
         "languages": LANGUAGE_OPTIONS,
@@ -2569,6 +2937,28 @@ async def admin_update_geo(geo_code: str, payload: GeoConfigPayload, request: Re
     ensure_admin_session(request)
     snapshot = save_geo_configuration(geo_code, payload)
     return {"ok": True, "geo": snapshot}
+
+
+@app.post("/api/admin/requisites/{geo_code}")
+async def admin_save_requisites(geo_code: str, payload: RequisitesPayload, request: Request):
+    ensure_admin_request_origin(request)
+    ensure_admin_session(request)
+    active_requisites = update_geo_requisites(
+        geo_code,
+        payload.bank_name,
+        payload.card_number,
+        payload.bic_swift,
+        payload.receiver_name,
+    )
+    return {"ok": True, "active_requisites": active_requisites}
+
+
+@app.post("/api/admin/managers")
+async def admin_save_manager(payload: ManagerPayload, request: Request):
+    ensure_admin_request_origin(request)
+    ensure_admin_session(request)
+    manager = save_geo_manager(payload)
+    return {"ok": True, "manager": manager, "profile": get_geo_profile(payload.geo_code)}
 
 
 @app.post("/api/admin/bot-users")

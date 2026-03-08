@@ -192,7 +192,7 @@
                                 <input type="text" x-model="linkForm.amount" class="input-shell w-full rounded-2xl px-4 py-4 outline-none" placeholder="250">
                             </label>
                         </div>
-                        <div class="grid gap-4 sm:grid-cols-2">
+                        <div class="grid gap-4 sm:grid-cols-3">
                             <label class="block">
                                 <span class="mb-2 block text-sm text-zinc-400">Язык лендинга</span>
                                 <select x-model="linkForm.language_code" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
@@ -208,6 +208,15 @@
                                     <option value="latest">Текущие активные</option>
                                     <template x-for="item in requisitesOptionsForGeo(linkForm.geo_code)" :key="item.id">
                                         <option :value="String(item.id)" x-text="requisitesOptionLabel(item)"></option>
+                                    </template>
+                                </select>
+                            </label>
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">Менеджер для ссылки</span>
+                                <select x-model="linkForm.manager_id" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                    <option value="default">Менеджер GEO по умолчанию</option>
+                                    <template x-for="item in managersForGeo(linkForm.geo_code)" :key="item.id">
+                                        <option :value="String(item.id)" x-text="managerOptionLabel(item)"></option>
                                     </template>
                                 </select>
                             </label>
@@ -234,7 +243,7 @@
                 <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                     <div>
                         <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Geo snapshots</p>
-                        <h2 class="mt-2 text-xl font-semibold">Активные конфигурации по GEO</h2>
+                        <h2 class="mt-2 text-xl font-semibold">Активные реквизиты по GEO</h2>
                     </div>
                     <div class="flex flex-wrap gap-2">
                         <template x-for="geo in geos()" :key="geo.profile.geo_code">
@@ -261,7 +270,8 @@
                                 <p><span class="text-zinc-500">Банк:</span> <span x-text="geo.active_requisites.bank_name"></span></p>
                                 <p><span class="text-zinc-500">IBAN:</span> <span class="font-mono text-xs" x-text="geo.active_requisites.card_number"></span></p>
                                 <p><span class="text-zinc-500">BIC / SWIFT:</span> <span class="font-mono text-xs" x-text="geo.active_requisites.bic_swift || 'не указан'"></span></p>
-                                <p><span class="text-zinc-500">Менеджер:</span> <span x-text="geo.profile.manager_name"></span></p>
+                                <p><span class="text-zinc-500">Менеджер по умолчанию:</span> <span x-text="geo.default_manager?.manager_name || 'не задан'"></span></p>
+                                <p><span class="text-zinc-500">Менеджеров в GEO:</span> <span x-text="(geo.managers || []).length"></span></p>
                                 <p><span class="text-zinc-500">Таймер:</span> <span x-text="`${geo.profile.refresh_minutes} мин`"></span></p>
                             </div>
                         </button>
@@ -297,36 +307,17 @@
 
                         <div class="grid gap-4 sm:grid-cols-2">
                             <label class="block">
-                                <span class="mb-2 block text-sm text-zinc-400">Имя менеджера</span>
-                                <input type="text" x-model="geoForm.manager_name" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                <span class="mb-2 block text-sm text-zinc-400">Менеджер GEO по умолчанию</span>
+                                <select x-model="geoForm.default_manager_id" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                    <option value="">Не выбран</option>
+                                    <template x-for="item in managersForGeo(editingGeoCode)" :key="item.id">
+                                        <option :value="String(item.id)" x-text="managerOptionLabel(item)"></option>
+                                    </template>
+                                </select>
                             </label>
                             <label class="block">
-                                <span class="mb-2 block text-sm text-zinc-400">Telegram-ссылка менеджера</span>
-                                <input type="text" x-model="geoForm.manager_telegram_url" class="input-shell w-full rounded-2xl px-4 py-4 outline-none" placeholder="https://t.me/manager_name">
-                            </label>
-                        </div>
-
-                        <label class="block">
-                            <span class="mb-2 block text-sm text-zinc-400">Таймер автообновления, минут</span>
-                            <input type="number" min="1" max="120" x-model="geoForm.refresh_minutes" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
-                        </label>
-
-                        <div class="grid gap-4 sm:grid-cols-4">
-                            <label class="block">
-                                <span class="mb-2 block text-sm text-zinc-400">Банк</span>
-                                <input type="text" x-model="geoForm.bank_name" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
-                            </label>
-                            <label class="block">
-                                <span class="mb-2 block text-sm text-zinc-400">IBAN</span>
-                                <input type="text" x-model="geoForm.card_number" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
-                            </label>
-                            <label class="block">
-                                <span class="mb-2 block text-sm text-zinc-400">BIC / SWIFT</span>
-                                <input type="text" x-model="geoForm.bic_swift" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
-                            </label>
-                            <label class="block">
-                                <span class="mb-2 block text-sm text-zinc-400">Получатель</span>
-                                <input type="text" x-model="geoForm.receiver_name" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                <span class="mb-2 block text-sm text-zinc-400">Таймер автообновления, минут</span>
+                                <input type="number" min="1" max="120" x-model="geoForm.refresh_minutes" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
                             </label>
                         </div>
 
@@ -339,6 +330,74 @@
                 </section>
 
                 <div class="space-y-5">
+                    <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+                        <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Requisites</p>
+                        <h2 class="mt-2 text-xl font-semibold">Новый комплект реквизитов</h2>
+                        <p class="mt-3 text-sm text-zinc-400">Добавляй новые реквизиты как отдельные наборы. Потом их можно выбрать по ID в генераторе ссылки.</p>
+
+                        <form class="mt-5 space-y-4" @submit.prevent="saveRequisites">
+                            <div class="grid gap-4 sm:grid-cols-4">
+                                <label class="block">
+                                    <span class="mb-2 block text-sm text-zinc-400">Банк</span>
+                                    <input type="text" x-model="requisitesForm.bank_name" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                </label>
+                                <label class="block">
+                                    <span class="mb-2 block text-sm text-zinc-400">IBAN</span>
+                                    <input type="text" x-model="requisitesForm.card_number" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                </label>
+                                <label class="block">
+                                    <span class="mb-2 block text-sm text-zinc-400">BIC / SWIFT</span>
+                                    <input type="text" x-model="requisitesForm.bic_swift" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                </label>
+                                <label class="block">
+                                    <span class="mb-2 block text-sm text-zinc-400">Получатель</span>
+                                    <input type="text" x-model="requisitesForm.receiver_name" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                </label>
+                            </div>
+                            <div x-show="requisitesMessage" x-cloak class="rounded-2xl bg-white/5 px-4 py-4 text-sm text-zinc-300" x-text="requisitesMessage"></div>
+                            <button type="submit" class="w-full rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Добавить реквизиты</button>
+                        </form>
+                    </section>
+
+                    <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+                        <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Managers</p>
+                        <h2 class="mt-2 text-xl font-semibold">Справочник менеджеров</h2>
+                        <p class="mt-3 text-sm text-zinc-400">Менеджеры теперь живут отдельно от GEO. Выбирай их в ссылке или назначай по умолчанию для GEO.</p>
+
+                        <form class="mt-5 space-y-4" @submit.prevent="saveManager">
+                            <div class="grid gap-4 sm:grid-cols-2">
+                                <label class="block">
+                                    <span class="mb-2 block text-sm text-zinc-400">Запись менеджера</span>
+                                    <select x-model="managerForm.manager_id" @change="syncManagerForm()" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                        <option value="new">Новый менеджер</option>
+                                        <template x-for="item in managersForGeo(editingGeoCode)" :key="item.id">
+                                            <option :value="String(item.id)" x-text="managerOptionLabel(item)"></option>
+                                        </template>
+                                    </select>
+                                </label>
+                                <label class="flex items-end gap-3 rounded-[1.4rem] border border-white/10 px-4 py-4">
+                                    <input type="checkbox" x-model="managerForm.make_default" class="h-4 w-4 rounded border-white/20 bg-transparent">
+                                    <span class="text-sm text-zinc-300">Сделать менеджером GEO по умолчанию</span>
+                                </label>
+                            </div>
+                            <div class="grid gap-4 sm:grid-cols-2">
+                                <label class="block">
+                                    <span class="mb-2 block text-sm text-zinc-400">Имя менеджера</span>
+                                    <input type="text" x-model="managerForm.manager_name" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                </label>
+                                <label class="block">
+                                    <span class="mb-2 block text-sm text-zinc-400">Telegram-ссылка</span>
+                                    <input type="text" x-model="managerForm.manager_telegram_url" class="input-shell w-full rounded-2xl px-4 py-4 outline-none" placeholder="https://t.me/manager_name">
+                                </label>
+                            </div>
+                            <div x-show="managerMessage" x-cloak class="rounded-2xl bg-white/5 px-4 py-4 text-sm text-zinc-300" x-text="managerMessage"></div>
+                            <div class="flex flex-wrap gap-2">
+                                <button type="submit" class="rounded-full bg-white px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-black">Сохранить менеджера</button>
+                                <button type="button" @click="resetManagerForm()" class="rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Новый</button>
+                            </div>
+                        </form>
+                    </section>
+
                     <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
                         <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Traffic intelligence</p>
                         <h2 class="mt-2 text-xl font-semibold">Гео и языки</h2>
@@ -388,8 +447,9 @@
                                         <div class="rounded-full bg-white/5 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-zinc-300" x-text="currentGeoSnapshot().profile.default_language"></div>
                                     </div>
                                     <div class="mt-4 space-y-2 text-sm text-zinc-300">
-                                        <p><span class="text-zinc-500">Менеджер:</span> <span x-text="currentGeoSnapshot().profile.manager_name"></span></p>
-                                        <p><span class="text-zinc-500">Telegram:</span> <span x-text="currentGeoSnapshot().profile.manager_telegram_url || 'не задан'"></span></p>
+                                        <p><span class="text-zinc-500">Менеджер по умолчанию:</span> <span x-text="currentGeoSnapshot().default_manager?.manager_name || 'не задан'"></span></p>
+                                        <p><span class="text-zinc-500">Telegram:</span> <span x-text="currentGeoSnapshot().default_manager?.manager_telegram_url || 'не задан'"></span></p>
+                                        <p><span class="text-zinc-500">Менеджеров в GEO:</span> <span x-text="(currentGeoSnapshot().managers || []).length"></span></p>
                                         <p><span class="text-zinc-500">Таймер:</span> <span x-text="`${currentGeoSnapshot().profile.refresh_minutes} мин`"></span></p>
                                         <p><span class="text-zinc-500">Банк:</span> <span x-text="currentGeoSnapshot().active_requisites.bank_name"></span></p>
                                         <p><span class="text-zinc-500">IBAN:</span> <span class="font-mono text-xs" x-text="currentGeoSnapshot().active_requisites.card_number"></span></p>
@@ -643,19 +703,30 @@
                     amount: "",
                     language_code: "auto",
                     requisites_id: "latest",
+                    manager_id: "default",
                     label: "",
                     comment: ""
                 },
                 geoForm: {
                     geo_name: "",
                     default_language: "es",
-                    manager_name: "",
-                    manager_telegram_url: "",
                     refresh_minutes: 15,
+                    default_manager_id: ""
+                },
+                requisitesMessage: "",
+                requisitesForm: {
                     bank_name: "",
                     card_number: "",
                     bic_swift: "",
                     receiver_name: ""
+                },
+                managerMessage: "",
+                managerForm: {
+                    manager_id: "new",
+                    geo_code: "ES",
+                    manager_name: "",
+                    manager_telegram_url: "",
+                    make_default: true
                 },
                 botUserMessage: "",
                 botUserForm: {
@@ -700,10 +771,15 @@
                     return this.geos().find((item) => item.profile.geo_code === this.editingGeoCode) || null;
                 },
 
+                managersForGeo(geoCode) {
+                    return (this.dashboard.managers || []).filter((item) => item.geo_code === geoCode);
+                },
+
                 selectGeo(code) {
                     this.editingGeoCode = code;
                     this.linkForm.geo_code = code;
                     this.syncGeoForm();
+                    this.resetManagerForm();
                     this.syncLinkSelections();
                 },
 
@@ -715,14 +791,35 @@
                     this.geoForm = {
                         geo_name: current.profile.geo_name || "",
                         default_language: current.profile.default_language || "en",
-                        manager_name: current.profile.manager_name || "",
-                        manager_telegram_url: current.profile.manager_telegram_url || "",
                         refresh_minutes: current.profile.refresh_minutes || 15,
-                        bank_name: current.active_requisites?.bank_name || "",
-                        card_number: current.active_requisites?.card_number || "",
-                        bic_swift: current.active_requisites?.bic_swift || "",
-                        receiver_name: current.active_requisites?.receiver_name || ""
+                        default_manager_id: current.profile.default_manager_id ? String(current.profile.default_manager_id) : ""
                     };
+                    this.requisitesForm = {
+                        bank_name: "",
+                        card_number: "",
+                        bic_swift: "",
+                        receiver_name: ""
+                    };
+                },
+
+                syncManagerForm() {
+                    const currentGeo = this.editingGeoCode;
+                    this.managerForm.geo_code = currentGeo;
+                    const selectedId = String(this.managerForm.manager_id || "new");
+                    if (selectedId === "new") {
+                        this.managerForm.manager_name = "";
+                        this.managerForm.manager_telegram_url = "";
+                        this.managerForm.make_default = true;
+                        return;
+                    }
+                    const manager = this.managersForGeo(currentGeo).find((item) => String(item.id) === selectedId);
+                    if (!manager) {
+                        this.resetManagerForm();
+                        return;
+                    }
+                    this.managerForm.manager_name = manager.manager_name || "";
+                    this.managerForm.manager_telegram_url = manager.manager_telegram_url || "";
+                    this.managerForm.make_default = String(this.geoForm.default_manager_id || "") === String(manager.id);
                 },
 
                 requisitesOptionsForGeo(geoCode) {
@@ -740,15 +837,33 @@
                     return parts.join(" | ");
                 },
 
+                managerOptionLabel(item) {
+                    const parts = [
+                        `ID ${item.id}`,
+                        item.manager_name || "",
+                        item.manager_telegram_url || ""
+                    ].filter(Boolean);
+                    return parts.join(" | ");
+                },
+
                 syncLinkSelections() {
                     const options = this.requisitesOptionsForGeo(this.linkForm.geo_code || this.editingGeoCode);
                     const selected = String(this.linkForm.requisites_id || "latest");
                     if (selected === "latest") {
+                    } else {
+                        const exists = options.some((item) => String(item.id) === selected);
+                        if (!exists) {
+                            this.linkForm.requisites_id = "latest";
+                        }
+                    }
+                    const managerOptions = this.managersForGeo(this.linkForm.geo_code || this.editingGeoCode);
+                    const selectedManager = String(this.linkForm.manager_id || "default");
+                    if (selectedManager === "default") {
                         return;
                     }
-                    const exists = options.some((item) => String(item.id) === selected);
-                    if (!exists) {
-                        this.linkForm.requisites_id = "latest";
+                    const managerExists = managerOptions.some((item) => String(item.id) === selectedManager);
+                    if (!managerExists) {
+                        this.linkForm.manager_id = "default";
                     }
                 },
 
@@ -821,6 +936,7 @@
                             this.linkForm.geo_code = this.geos()[0].profile.geo_code;
                         }
                         this.syncGeoForm();
+                        this.syncManagerForm();
                         this.syncLinkSelections();
                     } catch (error) {
                         console.error(error);
@@ -856,11 +972,17 @@
                 async saveGeo(successMessage = null) {
                     this.geoMessage = "";
                     try {
+                        const payload = {
+                            geo_name: this.geoForm.geo_name,
+                            default_language: this.geoForm.default_language,
+                            refresh_minutes: Number(this.geoForm.refresh_minutes),
+                            default_manager_id: this.geoForm.default_manager_id ? Number(this.geoForm.default_manager_id) : null
+                        };
                         const response = await fetch(this.apiUrl(`/api/admin/geos/${this.editingGeoCode}`), {
                             method: "POST",
                             credentials: "include",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify(this.geoForm)
+                            body: JSON.stringify(payload)
                         });
                         const data = await response.json();
                         if (!response.ok) {
@@ -870,6 +992,67 @@
                         await this.refreshDashboard();
                     } catch (error) {
                         this.geoMessage = error.message || "Не удалось сохранить GEO";
+                    }
+                },
+
+                async saveRequisites() {
+                    this.requisitesMessage = "";
+                    try {
+                        const response = await fetch(this.apiUrl(`/api/admin/requisites/${this.editingGeoCode}`), {
+                            method: "POST",
+                            credentials: "include",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(this.requisitesForm)
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) {
+                            throw new Error(data.detail || "Не удалось добавить реквизиты");
+                        }
+                        this.requisitesMessage = `Новый комплект реквизитов сохранён для ${this.editingGeoCode}`;
+                        await this.refreshDashboard();
+                    } catch (error) {
+                        this.requisitesMessage = error.message || "Не удалось добавить реквизиты";
+                    }
+                },
+
+                resetManagerForm() {
+                    this.managerForm = {
+                        manager_id: "new",
+                        geo_code: this.editingGeoCode || "ES",
+                        manager_name: "",
+                        manager_telegram_url: "",
+                        make_default: true
+                    };
+                    this.managerMessage = "";
+                },
+
+                async saveManager() {
+                    this.managerMessage = "";
+                    try {
+                        const payload = {
+                            manager_id: this.managerForm.manager_id === "new" ? null : Number(this.managerForm.manager_id),
+                            geo_code: this.editingGeoCode,
+                            manager_name: this.managerForm.manager_name,
+                            manager_telegram_url: this.managerForm.manager_telegram_url,
+                            make_default: Boolean(this.managerForm.make_default)
+                        };
+                        const response = await fetch(this.apiUrl("/api/admin/managers"), {
+                            method: "POST",
+                            credentials: "include",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(payload)
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) {
+                            throw new Error(data.detail || "Не удалось сохранить менеджера");
+                        }
+                        this.managerMessage = `Менеджер ${data.manager?.manager_name || ""} сохранён`;
+                        await this.refreshDashboard();
+                        this.geoForm.default_manager_id = data.profile?.default_manager_id ? String(data.profile.default_manager_id) : "";
+                        this.managerForm.manager_id = data.manager?.id ? String(data.manager.id) : "new";
+                        this.syncManagerForm();
+                    } catch (error) {
+                        this.managerMessage = error.message || "Не удалось сохранить менеджера";
                     }
                 },
 
@@ -925,7 +1108,10 @@
                         return;
                     }
                     const currentGeo = this.geos().find((item) => item.profile.geo_code === (this.linkForm.geo_code || this.editingGeoCode));
-                    if (!currentGeo?.profile?.manager_telegram_url) {
+                    const selectedManager = this.linkForm.manager_id === "default"
+                        ? currentGeo?.default_manager
+                        : this.managersForGeo(this.linkForm.geo_code || this.editingGeoCode).find((item) => String(item.id) === String(this.linkForm.manager_id));
+                    if (!selectedManager?.manager_telegram_url) {
                         this.linkMessage = "Ссылку нельзя создать: у выбранного GEO не задан контакт менеджера";
                         return;
                     }
@@ -945,6 +1131,9 @@
                     }
                     if (this.linkForm.requisites_id && this.linkForm.requisites_id !== "latest") {
                         url.searchParams.set("req", this.linkForm.requisites_id);
+                    }
+                    if (this.linkForm.manager_id && this.linkForm.manager_id !== "default") {
+                        url.searchParams.set("mgr", this.linkForm.manager_id);
                     }
                     if (rawLabel) {
                         url.searchParams.set("label", rawLabel.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/-{2,}/g, "-").replace(/^-|-$/g, ""));

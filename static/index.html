@@ -603,10 +603,14 @@
                     geo_code: "ES",
                     geo_name: "Spain",
                     default_language: "es",
-                    manager_name: "Manager",
-                    manager_telegram_url: "",
                     refresh_minutes: 15,
                     refresh_seconds: 900
+                },
+                manager: {
+                    id: null,
+                    geo_code: "ES",
+                    manager_name: "Manager",
+                    manager_telegram_url: ""
                 },
                 requisites: {
                     bank_name: "Dream Team Pay",
@@ -631,6 +635,7 @@
                     this.mode = context.mode || "invalid";
                     this.invalidReason = String(context.invalid_reason || "");
                     this.geo = context.geo || this.geo;
+                    this.manager = context.manager || this.manager;
                     this.requisites = context.requisites || this.requisites;
                     this.payment = context.payment || this.payment;
                     this.visitor = context.visitor || {};
@@ -675,6 +680,7 @@
                             available_languages: languageCatalog,
                             payment: this.payment,
                             geo: this.geo,
+                            manager: this.manager,
                             requisites: this.requisites,
                             visit: { token: "" },
                             visitor: {},
@@ -836,7 +842,7 @@
                 },
 
                 managerUrl() {
-                    const raw = String(this.geo.manager_telegram_url || "").trim();
+                    const raw = String(this.manager.manager_telegram_url || "").trim();
                     if (!raw) {
                         return "";
                     }
