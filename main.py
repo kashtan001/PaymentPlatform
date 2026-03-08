@@ -15,9 +15,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from telegram import ReplyKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
@@ -28,7 +29,23 @@ from telegram.ext import (
 # --- PATHS & CONFIG ---
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-DB_FILE = BASE_DIR / "database.sqlite"
+
+
+def resolve_db_file() -> Path:
+    raw_path = os.getenv("DB_PATH", "").strip()
+    if not raw_path:
+        legacy_path = BASE_DIR / "database.sqlite"
+        if legacy_path.exists():
+            return legacy_path
+        return BASE_DIR / "data" / "database.sqlite"
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = BASE_DIR / candidate
+    return candidate
+
+
+DB_FILE = resolve_db_file()
+DB_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
 def parse_optional_int(raw_value: str, default: int | None = None) -> int | None:
@@ -67,8 +84,6 @@ WAITING_MANAGER = 3
 WAITING_LINK_AMOUNT = 4
 WAITING_LINK_LABEL = 5
 WAITING_LINK_COMMENT = 6
-WAITING_REQUISITES_HISTORY = 7
-WAITING_REQUISITES_DELETE = 8
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
@@ -549,6 +564,20 @@ def init_db() -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bot_activity_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor_user_id INTEGER,
+            actor_role TEXT,
+            action_type TEXT NOT NULL,
+            geo_code TEXT,
+            target_user_id INTEGER,
+            payload TEXT,
+            created_at TEXT
+        )
+        """
+    )
 
     ensure_column(conn, "visits", "geo_code", "TEXT")
     ensure_column(conn, "visits", "payment_amount", "REAL")
@@ -565,10 +594,21 @@ def init_db() -> None:
     ensure_column(conn, "visits", "payment_comment", "TEXT")
     ensure_column(conn, "bot_admins", "role", "TEXT NOT NULL DEFAULT 'admin'")
     ensure_column(conn, "geo_requisites", "bic_swift", "TEXT DEFAULT ''")
+    ensure_column(conn, "bot_activity_log", "actor_role", "TEXT")
+    ensure_column(conn, "bot_activity_log", "geo_code", "TEXT")
+    ensure_column(conn, "bot_activity_log", "target_user_id", "INTEGER")
+    ensure_column(conn, "bot_activity_log", "payload", "TEXT")
+    ensure_column(conn, "bot_activity_log", "created_at", "TEXT")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_visits_visit_token
         ON visits (visit_token)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_bot_activity_actor
+        ON bot_activity_log (actor_user_id, id DESC)
         """
     )
     seed_bot_admins(conn)
@@ -935,6 +975,108 @@ def list_bot_admins() -> list[dict[str, Any]]:
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def log_bot_activity(
+    actor_user_id: int | None,
+    action_type: str,
+    geo_code: str | None = None,
+    target_user_id: int | None = None,
+    payload: str = "",
+) -> None:
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO bot_activity_log (
+            actor_user_id, actor_role, action_type, geo_code, target_user_id, payload, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            actor_user_id,
+            get_bot_user_role(actor_user_id),
+            action_type,
+            sanitize_geo_code(geo_code),
+            target_user_id,
+            payload[:500],
+            utc_now_iso(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_bot_activity(limit: int = 200) -> list[dict[str, Any]]:
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT
+            log.id,
+            log.actor_user_id,
+            log.actor_role,
+            log.action_type,
+            log.geo_code,
+            log.target_user_id,
+            log.payload,
+            log.created_at,
+            admin.username AS actor_username,
+            admin.full_name AS actor_full_name
+        FROM bot_activity_log AS log
+        LEFT JOIN bot_admins AS admin
+            ON admin.user_id = log.actor_user_id
+        ORDER BY log.id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_worker_stats() -> list[dict[str, Any]]:
+    users = list_bot_admins()
+    activity = list_bot_activity(limit=1000)
+    stats_by_user: dict[int, dict[str, Any]] = {}
+    for user in users:
+        user_id = int(user["user_id"])
+        stats_by_user[user_id] = {
+            **user,
+            "telegram_url": f"https://t.me/{user['username']}" if user.get("username") else "",
+            "actions_total": 0,
+            "links_created": 0,
+            "requisites_updated": 0,
+            "requisites_restored": 0,
+            "requisites_deleted": 0,
+            "manager_updates": 0,
+            "last_action_at": "",
+            "last_action_type": "",
+        }
+
+    for item in activity:
+        actor_user_id = item.get("actor_user_id")
+        if actor_user_id is None or actor_user_id not in stats_by_user:
+            continue
+        stats = stats_by_user[actor_user_id]
+        action_type = item.get("action_type") or ""
+        stats["actions_total"] += 1
+        if not stats["last_action_at"]:
+            stats["last_action_at"] = item.get("created_at") or ""
+            stats["last_action_type"] = action_type
+        if action_type == "create_link":
+            stats["links_created"] += 1
+        elif action_type == "update_requisites":
+            stats["requisites_updated"] += 1
+        elif action_type == "restore_requisites":
+            stats["requisites_restored"] += 1
+        elif action_type == "delete_requisites":
+            stats["requisites_deleted"] += 1
+        elif action_type == "update_manager":
+            stats["manager_updates"] += 1
+
+    return sorted(
+        stats_by_user.values(),
+        key=lambda item: (-int(item["actions_total"]), item.get("full_name") or "", int(item["user_id"])),
+    )
 
 
 def get_bot_user_role(user_id: int | None) -> str | None:
@@ -1530,6 +1672,7 @@ def main_keyboard(role: str | None) -> ReplyKeyboardMarkup:
         rows.append(["🔗 Ссылка на оплату"])
     if bot_role_has_permission(safe_role, "open_admin_panel"):
         rows.append(["🛠 Админка"])
+    rows.append(["ℹ️ Помощь"])
     return ReplyKeyboardMarkup(
         rows,
         resize_keyboard=True,
@@ -1580,14 +1723,38 @@ def build_admins_text() -> str:
         role_label = get_bot_role_label(item.get("role"))
         lines.append(f"\nID: {item['user_id']} | {display_name} | {username} | роль: {role_label}")
     lines.append(
-        "\nДобавить: /addadmin 123456789\n"
+        "\nРоли:\n"
+        "Обработчик -> только ссылки\n"
+        "Процессор -> только реквизиты\n"
+        "Админ -> полный доступ\n\n"
+        "Добавить админа: /addadmin 123456789\n"
+        "Поставить роль: /setrole 123456789 handler|processor|admin\n"
         "Удалить: /removeadmin 123456789\n"
         "Список: /admins"
     )
     return "\n".join(lines)
 
 
-def build_requisites_history_text(geo_code: str) -> str:
+def build_help_text(role: str | None, geo_code: str) -> str:
+    safe_role = sanitize_bot_role(role, "handler")
+    lines = [
+        "Что можно делать сейчас:",
+        f"Текущий GEO: {geo_code}",
+        "",
+        "1. Сначала выберите GEO, если нужен другой.",
+        "2. Потом используйте доступные вам кнопки снизу.",
+    ]
+    if bot_role_has_permission(safe_role, "create_link"):
+        lines.append("3. Для ссылки на оплату нажмите `🔗 Ссылка на оплату` и следуйте шагам.")
+    if bot_role_has_permission(safe_role, "edit_requisites"):
+        lines.append("3. Для реквизитов нажмите `📝 Реквизиты`.")
+        lines.append("4. История реквизитов открывается кнопкой `🗂 История реквизитов`.")
+    if bot_role_has_permission(safe_role, "manage_access"):
+        lines.append("5. Права доступа смотрите в `👥 Права доступа`.")
+    return "\n".join(lines)
+
+
+def build_requisites_history_text(geo_code: str, action: str = "restore") -> str:
     items = list_geo_requisites_history_for_geo(geo_code)
     if not items:
         return (
@@ -1595,9 +1762,14 @@ def build_requisites_history_text(geo_code: str) -> str:
             "Сначала сохраните хотя бы один комплект реквизитов."
         )
 
+    action_hint = (
+        "Нажмите кнопку под нужной записью, чтобы снова сделать её активной."
+        if action == "restore"
+        else "Нажмите кнопку под нужной записью, чтобы удалить запись из истории."
+    )
     lines = [
         f"История реквизитов для {geo_code}:",
-        "Отправьте ID записи, чтобы снова сделать эти реквизиты активными.",
+        action_hint,
         "",
     ]
     for item in items:
@@ -1606,6 +1778,23 @@ def build_requisites_history_text(geo_code: str) -> str:
             f"{item['receiver_name']} | {item['created_at']}"
         )
     return "\n".join(lines)
+
+
+def requisites_history_keyboard(geo_code: str, action: str = "restore") -> InlineKeyboardMarkup:
+    items = list_geo_requisites_history_for_geo(geo_code)
+    rows: list[list[InlineKeyboardButton]] = []
+    action_label = "Активировать" if action == "restore" else "Удалить"
+    for item in items:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{action_label} ID {item['id']}",
+                    callback_data=f"req:{action}:{geo_code}:{item['id']}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="Обновить список", callback_data=f"req:list:{action}:{geo_code}")])
+    return InlineKeyboardMarkup(rows)
 
 
 async def admin_check(update: Update, permission: str | None = None) -> bool:
@@ -1639,7 +1828,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Внутренняя панель команды активна.\n\n"
         f"Ваша роль: {get_bot_role_label(role)}\n"
         f"Текущий выбранный GEO: {selected_geo}\n\n"
-        f"{build_geo_details_text(selected_geo)}",
+        f"{build_geo_details_text(selected_geo)}\n\n{build_help_text(role, selected_geo)}",
         reply_markup=main_keyboard(role),
     )
 
@@ -1651,6 +1840,18 @@ async def show_geo_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.effective_message.reply_text(
         build_geo_overview_text(),
         reply_markup=main_keyboard(get_bot_user_role(user_id)),
+    )
+
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await admin_check(update):
+        return
+    user_id = update.effective_user.id if update.effective_user else None
+    role = get_bot_user_role(user_id)
+    selected_geo = get_selected_geo(context, user_id)
+    await update.effective_message.reply_text(
+        build_help_text(role, selected_geo),
+        reply_markup=main_keyboard(role),
     )
 
 
@@ -1699,6 +1900,7 @@ async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         added = add_bot_admin(update.effective_user.id, target_id)
         if added:
             added_ids.append(target_id)
+            log_bot_activity(update.effective_user.id, "set_role", target_user_id=target_id, payload="admin")
         else:
             skipped_ids.append(target_id)
     summary_lines = []
@@ -1738,6 +1940,7 @@ async def remove_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         success, message = remove_bot_admin(target_id)
         if success:
             removed_ids.append(target_id)
+            log_bot_activity(update.effective_user.id, "remove_user", target_user_id=target_id)
         else:
             failed_messages.append(f"{target_id}: {message}")
     summary_lines = []
@@ -1749,6 +1952,38 @@ async def remove_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         summary_lines.append("Никого не удалось удалить.")
     await update.effective_message.reply_text(
         f"{chr(10).join(summary_lines)}\n\n{build_admins_text()}",
+        reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
+    )
+
+
+async def set_role_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await admin_check(update, "manage_access"):
+        return
+    if len(context.args) < 2:
+        await update.effective_message.reply_text(
+            "Формат: /setrole 123456789 handler|processor|admin",
+            reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
+        )
+        return
+    target_user_id = parse_optional_int(context.args[0])
+    target_role = sanitize_bot_role(context.args[1], "")
+    if target_user_id is None or target_user_id <= 0 or target_role not in BOT_ROLE_SET:
+        await update.effective_message.reply_text(
+            "Пример: /setrole 123456789 processor",
+            reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
+        )
+        return
+    try:
+        save_bot_user_role(update.effective_user.id, target_user_id, target_role)
+    except HTTPException as exc:
+        await update.effective_message.reply_text(
+            str(exc.detail),
+            reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
+        )
+        return
+    log_bot_activity(update.effective_user.id, "set_role", target_user_id=target_user_id, payload=target_role)
+    await update.effective_message.reply_text(
+        f"Роль для {target_user_id} обновлена: {get_bot_role_label(target_role)}\n\n{build_admins_text()}",
         reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
     )
 
@@ -1773,6 +2008,7 @@ async def select_geo_save(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     context.user_data["selected_geo"] = geo_code
     set_bot_admin_selected_geo(update.effective_user.id if update.effective_user else None, geo_code)
+    log_bot_activity(update.effective_user.id if update.effective_user else None, "select_geo", geo_code=geo_code)
     await update.effective_message.reply_text(
         f"GEO переключен на {geo_code}.\n\n{build_geo_details_text(geo_code)}",
         reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
@@ -1810,6 +2046,7 @@ async def change_reqs_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
     update_geo_requisites(selected_geo, lines[0], lines[1], "" if lines[2] == "-" else lines[2], lines[3])
+    log_bot_activity(user_id, "update_requisites", geo_code=selected_geo, payload=lines[1])
     await update.effective_message.reply_text(
         f"Реквизиты для {selected_geo} обновлены.\n\n{build_geo_details_text(selected_geo)}",
         reply_markup=main_keyboard(get_bot_user_role(user_id)),
@@ -1817,32 +2054,103 @@ async def change_reqs_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return ConversationHandler.END
 
 
-async def show_requisites_history_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def show_requisites_history_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await admin_check(update, "view_requisites_history"):
-        return ConversationHandler.END
+        return
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
     await update.effective_message.reply_text(
-        f"{build_requisites_history_text(selected_geo)}\n\n"
-        "Для отмены отправьте /cancel",
-        reply_markup=main_keyboard(get_bot_user_role(user_id)),
+        build_requisites_history_text(selected_geo, "restore"),
+        reply_markup=requisites_history_keyboard(selected_geo, "restore"),
     )
-    return WAITING_REQUISITES_HISTORY
+
+
+async def show_requisites_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await admin_check(update, "delete_requisites"):
+        return
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
+    await update.effective_message.reply_text(
+        f"{build_requisites_history_text(selected_geo, 'delete')}\n\n"
+        "Последний комплект реквизитов удалить нельзя.",
+        reply_markup=requisites_history_keyboard(selected_geo, "delete"),
+    )
+
+
+async def requisites_history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None:
+        return
+    if not await admin_check(update, "view_requisites_history"):
+        await query.answer()
+        return
+    payload = (query.data or "").split(":")
+    if len(payload) < 4:
+        await query.answer()
+        return
+    _, action, geo_code, history_id_raw = payload[0], payload[1], payload[2], payload[3]
+    if payload[1] == "list":
+        action = payload[2]
+        geo_code = payload[3]
+        await query.edit_message_text(
+            build_requisites_history_text(geo_code, action),
+            reply_markup=requisites_history_keyboard(geo_code, action),
+        )
+        await query.answer("Список обновлен")
+        return
+    history_id = parse_optional_int(history_id_raw)
+    user_id = update.effective_user.id if update.effective_user else None
+    if history_id is None or history_id <= 0:
+        await query.answer("Некорректный ID")
+        return
+    try:
+        if action == "restore":
+            restore_geo_requisites_from_history(geo_code, history_id)
+            log_bot_activity(user_id, "restore_requisites", geo_code=geo_code, payload=str(history_id))
+            text = (
+                f"Реквизиты из истории ID {history_id} снова активны для {geo_code}.\n\n"
+                f"{build_geo_details_text(geo_code)}"
+            )
+            await query.edit_message_text(text)
+            await query.answer("Реквизиты активированы")
+            return
+        if action == "delete":
+            if not bot_role_has_permission(get_bot_user_role(user_id), "delete_requisites"):
+                await query.answer("Недостаточно прав")
+                return
+            delete_geo_requisites_history_item(geo_code, history_id)
+            log_bot_activity(user_id, "delete_requisites", geo_code=geo_code, payload=str(history_id))
+            await query.edit_message_text(
+                f"Реквизиты ID {history_id} удалены для {geo_code}.\n\n"
+                f"{build_requisites_history_text(geo_code, 'delete')}",
+                reply_markup=requisites_history_keyboard(geo_code, "delete"),
+            )
+            await query.answer("Реквизиты удалены")
+            return
+    except HTTPException as exc:
+        await query.answer(str(exc.detail), show_alert=True)
+        return
 
 
 async def show_requisites_history_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.effective_message.text.strip() == "🗂 История реквизитов":
+        await show_requisites_history_start(update, context)
+        return ConversationHandler.END
     history_id = parse_optional_int(update.effective_message.text)
     if history_id is None or history_id <= 0:
-        await update.effective_message.reply_text("Нужен числовой ID записи из истории.")
-        return WAITING_REQUISITES_HISTORY
+        await update.effective_message.reply_text(
+            "История уже показана выше. Нажмите кнопку у нужной записи или отправьте /cancel."
+        )
+        return ConversationHandler.END
 
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
     try:
         restore_geo_requisites_from_history(selected_geo, history_id)
+        log_bot_activity(user_id, "restore_requisites", geo_code=selected_geo, payload=str(history_id))
     except HTTPException as exc:
         await update.effective_message.reply_text(str(exc.detail))
-        return WAITING_REQUISITES_HISTORY
+        return ConversationHandler.END
 
     await update.effective_message.reply_text(
         f"Реквизиты из истории ID {history_id} снова активны для {selected_geo}.\n\n"
@@ -1853,33 +2161,24 @@ async def show_requisites_history_save(update: Update, context: ContextTypes.DEF
 
 
 async def delete_requisites_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await admin_check(update, "delete_requisites"):
-        return ConversationHandler.END
-    user_id = update.effective_user.id if update.effective_user else None
-    selected_geo = get_selected_geo(context, user_id)
-    await update.effective_message.reply_text(
-        f"{build_requisites_history_text(selected_geo)}\n\n"
-        "Отправьте ID записи, которую нужно удалить.\n"
-        "Последний комплект реквизитов удалить нельзя.\n"
-        "Для отмены отправьте /cancel",
-        reply_markup=main_keyboard(get_bot_user_role(user_id)),
-    )
-    return WAITING_REQUISITES_DELETE
+    await show_requisites_delete_start(update, context)
+    return ConversationHandler.END
 
 
 async def delete_requisites_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     history_id = parse_optional_int(update.effective_message.text)
     if history_id is None or history_id <= 0:
-        await update.effective_message.reply_text("Нужен числовой ID записи из истории.")
-        return WAITING_REQUISITES_DELETE
+        await update.effective_message.reply_text("История уже показана выше. Нажмите кнопку у нужной записи или отправьте /cancel.")
+        return ConversationHandler.END
 
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
     try:
         delete_geo_requisites_history_item(selected_geo, history_id)
+        log_bot_activity(user_id, "delete_requisites", geo_code=selected_geo, payload=str(history_id))
     except HTTPException as exc:
         await update.effective_message.reply_text(str(exc.detail))
-        return WAITING_REQUISITES_DELETE
+        return ConversationHandler.END
 
     await update.effective_message.reply_text(
         f"Реквизиты ID {history_id} удалены для {selected_geo}.\n\n{build_geo_details_text(selected_geo)}",
@@ -1916,6 +2215,7 @@ async def change_manager_save(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
     update_geo_manager(selected_geo, lines[0], manager_link)
+    log_bot_activity(user_id, "update_manager", geo_code=selected_geo, payload=lines[0])
     await update.effective_message.reply_text(
         f"Менеджер для {selected_geo} обновлен.\n\n{build_geo_details_text(selected_geo)}",
         reply_markup=main_keyboard(get_bot_user_role(user_id)),
@@ -1980,6 +2280,7 @@ async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
     context.user_data.pop("temp_amount", None)
     context.user_data.pop("temp_label", None)
+    log_bot_activity(user_id, "create_link", geo_code=selected_geo, payload=f"{amount:.2f}")
     await update.effective_message.reply_text(
         f"Ссылка готова.\n\n"
         f"GEO: {selected_geo}\n"
@@ -2013,23 +2314,6 @@ if bot_app is not None:
         states={WAITING_REQUISITES: [MessageHandler(filters.TEXT & ~filters.COMMAND, change_reqs_save)]},
         fallbacks=[CommandHandler("cancel", cancel_cmd)],
     )
-    conv_handler_req_history = ConversationHandler(
-        entry_points=[
-            CommandHandler("reqhistory", show_requisites_history_start),
-            MessageHandler(filters.Regex("^🗂 История реквизитов$"), show_requisites_history_start),
-        ],
-        states={
-            WAITING_REQUISITES_HISTORY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, show_requisites_history_save)
-            ]
-        },
-        fallbacks=[CommandHandler("cancel", cancel_cmd)],
-    )
-    conv_handler_req_delete = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^🗑 Удалить реквизит$"), delete_requisites_start)],
-        states={WAITING_REQUISITES_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_requisites_save)]},
-        fallbacks=[CommandHandler("cancel", cancel_cmd)],
-    )
     conv_handler_manager = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^👤 Менеджер$"), change_manager_start)],
         states={WAITING_MANAGER: [MessageHandler(filters.TEXT & ~filters.COMMAND, change_manager_save)]},
@@ -2046,17 +2330,22 @@ if bot_app is not None:
     )
 
     bot_app.add_handler(CommandHandler("start", start_cmd))
+    bot_app.add_handler(CommandHandler("help", help_cmd))
     bot_app.add_handler(CommandHandler("admins", show_admins_cmd))
     bot_app.add_handler(CommandHandler("addadmin", add_admin_cmd))
+    bot_app.add_handler(CommandHandler("setrole", set_role_cmd))
     bot_app.add_handler(CommandHandler("removeadmin", remove_admin_cmd))
     bot_app.add_handler(CommandHandler("adminpanel", show_admin_panel_cmd))
+    bot_app.add_handler(CommandHandler("reqhistory", show_requisites_history_start))
     bot_app.add_handler(MessageHandler(filters.Regex("^📊 GEO статус$"), show_geo_status_cmd))
     bot_app.add_handler(MessageHandler(filters.Regex("^👥 Права доступа$"), show_admins_cmd))
+    bot_app.add_handler(MessageHandler(filters.Regex("^ℹ️ Помощь$"), help_cmd))
+    bot_app.add_handler(MessageHandler(filters.Regex("^🗂 История реквизитов$"), show_requisites_history_start))
+    bot_app.add_handler(MessageHandler(filters.Regex("^🗑 Удалить реквизит$"), show_requisites_delete_start))
     bot_app.add_handler(MessageHandler(filters.Regex("^🛠 Админка$"), show_admin_panel_cmd))
+    bot_app.add_handler(CallbackQueryHandler(requisites_history_callback, pattern=r"^req:"))
     bot_app.add_handler(conv_handler_geo)
     bot_app.add_handler(conv_handler_req)
-    bot_app.add_handler(conv_handler_req_history)
-    bot_app.add_handler(conv_handler_req_delete)
     bot_app.add_handler(conv_handler_manager)
     bot_app.add_handler(conv_handler_link)
 
@@ -2260,9 +2549,12 @@ async def admin_dashboard(request: Request):
     return {
         "generated_at": utc_now_iso(),
         "web_url": WEB_URL,
+        "db_path": str(DB_FILE),
         "bot": get_bot_status(),
         "bot_users": list_bot_admins(),
         "bot_roles": BOT_ROLE_OPTIONS,
+        "worker_stats": get_worker_stats(),
+        "bot_activity": list_bot_activity(),
         "stats": get_summary_stats(),
         "geos": list_geo_snapshots(),
         "requisites_history": list_geo_requisites_history(),

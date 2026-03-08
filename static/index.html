@@ -95,8 +95,10 @@
         .comment-card {
             position: relative;
             overflow: hidden;
-            background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
-            border: 1px solid var(--line);
+            background:
+                radial-gradient(circle at top right, rgba(99, 91, 255, 0.14), transparent 36%),
+                linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+            border: 1px solid rgba(99, 91, 255, 0.18);
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
         }
 
@@ -109,9 +111,9 @@
         }
 
         .comment-icon-shell {
-            background: rgba(99, 91, 255, 0.08);
+            background: rgba(99, 91, 255, 0.12);
             color: var(--accent);
-            border: 1px solid rgba(99, 91, 255, 0.14);
+            border: 1px solid rgba(99, 91, 255, 0.18);
         }
 
         .detail-row + .detail-row {
@@ -147,8 +149,8 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 8v4m0 4h.01M5.6 19h12.8c1.33 0 2.16-1.44 1.49-2.6L13.49 5.2c-.67-1.16-2.31-1.16-2.98 0L4.11 16.4C3.44 17.56 4.27 19 5.6 19z" />
                         </svg>
                     </div>
-                    <h1 class="mt-6 text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl" x-text="copy.invalidTitle"></h1>
-                    <p class="mt-4 text-base leading-7 text-slate-600" x-text="copy.invalidText"></p>
+                    <h1 class="mt-6 text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl" x-text="resolvedInvalidTitle()"></h1>
+                    <p class="mt-4 text-base leading-7 text-slate-600" x-text="resolvedInvalidText()"></p>
                     <div class="mt-8 flex flex-wrap justify-center gap-3">
                         <a x-show="hasManagerLink()" x-cloak :href="managerUrl()" target="_blank" rel="noreferrer"
                            class="inline-flex items-center justify-center rounded-full bg-[var(--accent)] px-6 py-3 text-sm font-semibold text-white transition hover:bg-[var(--accent-dark)]">
@@ -170,9 +172,18 @@
                             <div class="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-500" x-text="payment.currency"></div>
                         </div>
 
-                        <div x-show="hasPaymentLabel()" x-cloak class="mt-6 rounded-[1.35rem] bg-white px-4 py-4">
-                            <p class="text-[11px] font-medium uppercase tracking-[0.26em] text-slate-400" x-text="copy.paymentPurpose"></p>
-                            <p class="mt-2 text-sm font-medium leading-6 text-slate-700" x-text="payment.label"></p>
+                        <div x-show="hasPaymentComment()" x-cloak class="comment-card mt-6 rounded-[1.5rem] px-5 py-5 sm:px-6">
+                            <div class="flex items-start gap-4">
+                                <div class="comment-icon-shell flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 9v4m0 4h.01M10.29 3.86l-7.5 13A1 1 0 0 0 3.66 18h16.68a1 1 0 0 0 .87-1.5l-7.5-13a1 1 0 0 0-1.74 0z" />
+                                    </svg>
+                                </div>
+                                <div class="min-w-0">
+                                    <p class="text-xs font-semibold uppercase tracking-[0.3em] text-[var(--accent)]" x-text="copy.paymentComment"></p>
+                                    <p class="mt-3 break-words whitespace-pre-line text-base font-semibold leading-7 text-slate-950" x-text="payment.comment"></p>
+                                </div>
+                            </div>
                         </div>
 
                         <div x-show="showTimer()" x-cloak class="mt-6 rounded-[1.35rem] border border-[var(--line)] bg-white px-4 py-4">
@@ -268,6 +279,18 @@
 
                             <div class="detail-row flex items-center justify-between gap-4 px-4 py-4 sm:px-5">
                                 <div class="min-w-0">
+                                    <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400">BIC / SWIFT</p>
+                                    <p class="mt-1 font-mono text-sm font-medium text-slate-950" x-text="requisites.bic_swift || '—'"></p>
+                                </div>
+                                <button type="button" @click="copyField('bic', requisites.bic_swift)"
+                                        class="rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition"
+                                        :disabled="!requisites.bic_swift"
+                                        :class="!requisites.bic_swift ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : (copiedField === 'bic' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800')"
+                                        x-text="copiedField === 'bic' ? '✓ ' + copy.copied : copy.copyAction"></button>
+                            </div>
+
+                            <div class="detail-row flex items-center justify-between gap-4 px-4 py-4 sm:px-5">
+                                <div class="min-w-0">
                                     <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.receiver"></p>
                                     <p class="mt-1 truncate text-sm font-semibold text-slate-950" x-text="requisites.receiver_name"></p>
                                 </div>
@@ -278,18 +301,9 @@
                             </div>
                         </div>
 
-                        <div x-show="hasPaymentComment()" x-cloak class="comment-card mt-6 rounded-[1.5rem] px-5 py-5 sm:px-6">
-                            <div class="flex items-start gap-4">
-                                <div class="comment-icon-shell flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8 10h8M8 14h5m-7 6 2.8-2H17a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v8a3 3 0 0 0 2 2.83V20z" />
-                                    </svg>
-                                </div>
-                                <div class="min-w-0">
-                                    <p class="text-[11px] font-medium uppercase tracking-[0.26em] text-slate-400" x-text="copy.paymentComment"></p>
-                                    <p class="mt-3 break-words whitespace-pre-line text-sm leading-6 text-slate-700" x-text="payment.comment"></p>
-                                </div>
-                            </div>
+                        <div x-show="hasPaymentLabel()" x-cloak class="mt-6 rounded-[1.35rem] border border-[var(--line)] bg-white px-5 py-5">
+                            <p class="text-[11px] font-medium uppercase tracking-[0.26em] text-slate-400" x-text="copy.paymentPurpose"></p>
+                            <p class="mt-3 break-words whitespace-pre-line text-base font-semibold leading-7 text-slate-950" x-text="payment.label"></p>
                         </div>
 
                         <div class="mt-6 rounded-[1.5rem] border border-[var(--line)] bg-white px-4 py-5 sm:px-5">
@@ -297,14 +311,14 @@
                             <p class="mt-3 text-sm leading-6 text-slate-700" x-text="copy.afterPaymentHint"></p>
 
                             <div class="mt-5 flex flex-wrap gap-3">
-                                <a x-show="hasManagerLink() && clientReady" x-cloak :href="managerUrl()" target="_blank" rel="noreferrer"
+                                <a x-show="hasManagerLink()" x-cloak :href="managerUrl()" target="_blank" rel="noreferrer"
                                    class="inline-flex items-center justify-center rounded-2xl bg-[var(--accent)] px-5 py-3.5 text-sm font-semibold text-white transition hover:bg-[var(--accent-dark)]">
                                     <span x-text="copy.managerButton"></span>
                                 </a>
                             </div>
 
-                            <p x-show="!clientReady" x-cloak class="mt-4 text-sm leading-6 text-slate-500" x-text="copy.saveRequired"></p>
                             <p x-show="clientReady && !hasManagerLink()" x-cloak class="mt-4 text-sm leading-6 text-slate-500" x-text="copy.managerUnavailable"></p>
+                            <p x-show="!clientReady && !hasManagerLink()" x-cloak class="mt-4 text-sm leading-6 text-slate-500" x-text="copy.managerUnavailable"></p>
                         </div>
                     </div>
                 </div>
@@ -348,7 +362,6 @@
 
         const localeMap = {
             en: "en-GB",
-            ru: "ru-RU",
             es: "es-ES",
             it: "it-IT",
             de: "de-DE",
@@ -357,7 +370,6 @@
 
         const languageCatalog = [
             { code: "en", label: "English" },
-            { code: "ru", label: "Русский" },
             { code: "es", label: "Español" },
             { code: "it", label: "Italiano" },
             { code: "de", label: "Deutsch" },
@@ -372,12 +384,14 @@
                 close: "Close",
                 invalidTitle: "This payment link is incomplete",
                 invalidText: "Ask your manager for a valid payment link with the amount included.",
+                missingManagerTitle: "This payment page is unavailable",
+                missingManagerText: "This payment link cannot be used yet because no manager contact is configured.",
                 bankTransfer: "Bank transfer",
                 paymentPurpose: "Payment purpose",
-                paymentComment: "Payment comment",
+                paymentComment: "Important!",
                 timerLabel: "Details refresh in",
                 timerLive: "Live",
-                timerText: "When the timer reaches zero, the page will refresh and load the latest payment details.",
+                timerText: "When the timer ends, the page will refresh and new payment details will appear.",
                 clientSection: "Payer details",
                 clientTitle: "Enter your first and last name",
                 clientHint: "These details are stored with this payment request.",
@@ -393,7 +407,7 @@
                 paymentDetailsTitle: "Transfer using the details below",
                 paymentDetailsHint: "Copy the bank details exactly as shown on this page.",
                 bank: "Bank",
-                account: "Card / account",
+                account: "IBAN",
                 receiver: "Receiver",
                 copyAction: "Copy",
                 copied: "Copied",
@@ -403,44 +417,6 @@
                 managerUnavailable: "Manager Telegram link is not configured yet. Contact your manager directly.",
                 saveRequired: "Save your first and last name to enable manager access."
             },
-            ru: {
-                loading: "Загрузка",
-                chooseLanguage: "Выберите язык",
-                defaultLanguage: "По умолчанию:",
-                close: "Закрыть",
-                invalidTitle: "Ссылка на оплату заполнена не полностью",
-                invalidText: "Попросите менеджера отправить корректную ссылку, в которой уже указана сумма.",
-                bankTransfer: "Банковский перевод",
-                paymentPurpose: "Назначение платежа",
-                paymentComment: "Комментарий к платежу",
-                timerLabel: "Реквизиты обновятся через",
-                timerLive: "Активно",
-                timerText: "Когда таймер закончится, страница перезагрузится и подтянет актуальные реквизиты.",
-                clientSection: "Данные плательщика",
-                clientTitle: "Введите имя и фамилию",
-                clientHint: "Эти данные сохраняются вместе с текущим запросом на оплату.",
-                firstName: "Имя",
-                lastName: "Фамилия",
-                saveClient: "Сохранить и продолжить",
-                savingClient: "Сохраняем...",
-                savedClient: "Сохранено для этой оплаты",
-                editButton: "Изменить",
-                requiredFields: "Укажите и имя, и фамилию.",
-                saveFailed: "Не удалось сохранить данные. Попробуйте еще раз.",
-                paymentDetails: "Реквизиты",
-                paymentDetailsTitle: "Переведите сумму по реквизитам ниже",
-                paymentDetailsHint: "Копируйте реквизиты в точности так, как они указаны на этой странице.",
-                bank: "Банк",
-                account: "Карта / счет",
-                receiver: "Получатель",
-                copyAction: "Копировать",
-                copied: "Скопировано",
-                afterPayment: "После оплаты",
-                afterPaymentHint: "Как только перевод будет выполнен, отправьте чек вашему менеджеру в Telegram.",
-                managerButton: "Открыть Telegram",
-                managerUnavailable: "Ссылка на Telegram менеджера пока не настроена. Свяжитесь с ним напрямую.",
-                saveRequired: "Сначала сохраните имя и фамилию, чтобы открыть доступ к менеджеру."
-            },
             es: {
                 loading: "Cargando",
                 chooseLanguage: "Elegir idioma",
@@ -448,12 +424,14 @@
                 close: "Cerrar",
                 invalidTitle: "Este enlace de pago está incompleto",
                 invalidText: "Pide a tu manager un enlace correcto con el importe incluido.",
+                missingManagerTitle: "Esta pagina de pago no esta disponible",
+                missingManagerText: "Este enlace no se puede usar todavia porque no hay un contacto del manager configurado.",
                 bankTransfer: "Transferencia bancaria",
                 paymentPurpose: "Concepto del pago",
-                paymentComment: "Comentario del pago",
-                timerLabel: "Los datos se actualizarán en",
+                paymentComment: "Importante!",
+                timerLabel: "Los datos se actualizaran en",
                 timerLive: "Activo",
-                timerText: "Cuando el temporizador llegue a cero, la página se recargará con los datos más recientes.",
+                timerText: "Cuando termine el temporizador, la pagina se recargara y apareceran nuevos datos de pago.",
                 clientSection: "Datos del pagador",
                 clientTitle: "Introduce tu nombre y apellido",
                 clientHint: "Estos datos se guardan junto con esta solicitud de pago.",
@@ -469,7 +447,7 @@
                 paymentDetailsTitle: "Haz la transferencia con estos datos",
                 paymentDetailsHint: "Copia los datos exactamente como aparecen en esta página.",
                 bank: "Banco",
-                account: "Tarjeta / cuenta",
+                account: "IBAN",
                 receiver: "Beneficiario",
                 copyAction: "Copiar",
                 copied: "Copiado",
@@ -486,12 +464,14 @@
                 close: "Chiudi",
                 invalidTitle: "Questo link di pagamento è incompleto",
                 invalidText: "Chiedi al tuo manager un link corretto con l'importo già incluso.",
+                missingManagerTitle: "Questa pagina di pagamento non e disponibile",
+                missingManagerText: "Questo link non puo essere usato finche non viene configurato un contatto del manager.",
                 bankTransfer: "Bonifico bancario",
                 paymentPurpose: "Causale",
-                paymentComment: "Commento al pagamento",
+                paymentComment: "Importante!",
                 timerLabel: "I dati si aggiorneranno tra",
                 timerLive: "Attivo",
-                timerText: "Quando il timer arriva a zero, la pagina si ricarica con i dati aggiornati.",
+                timerText: "Quando il timer termina, la pagina si ricarica e compariranno nuovi dati di pagamento.",
                 clientSection: "Dati del pagatore",
                 clientTitle: "Inserisci nome e cognome",
                 clientHint: "Questi dati vengono salvati insieme a questa richiesta di pagamento.",
@@ -507,7 +487,7 @@
                 paymentDetailsTitle: "Effettua il trasferimento con questi dati",
                 paymentDetailsHint: "Copia i dati esattamente come sono mostrati in questa pagina.",
                 bank: "Banca",
-                account: "Carta / conto",
+                account: "IBAN",
                 receiver: "Beneficiario",
                 copyAction: "Copia",
                 copied: "Copiato",
@@ -524,12 +504,14 @@
                 close: "Schließen",
                 invalidTitle: "Dieser Zahlungslink ist unvollständig",
                 invalidText: "Bitte deinen Manager um einen gültigen Link mit dem bereits eingetragenen Betrag.",
+                missingManagerTitle: "Diese Zahlungsseite ist nicht verfugbar",
+                missingManagerText: "Dieser Link kann noch nicht verwendet werden, weil kein Manager-Kontakt eingerichtet ist.",
                 bankTransfer: "Banküberweisung",
                 paymentPurpose: "Verwendungszweck",
-                paymentComment: "Zahlungskommentar",
+                paymentComment: "Wichtig!",
                 timerLabel: "Daten aktualisieren sich in",
                 timerLive: "Aktiv",
-                timerText: "Wenn der Timer abläuft, lädt die Seite die neuesten Zahlungsdaten neu.",
+                timerText: "Wenn der Timer endet, wird die Seite neu geladen und es erscheinen neue Zahlungsdaten.",
                 clientSection: "Zahlerdaten",
                 clientTitle: "Vorname und Nachname eingeben",
                 clientHint: "Diese Daten werden zusammen mit dieser Zahlungsanfrage gespeichert.",
@@ -545,7 +527,7 @@
                 paymentDetailsTitle: "Überweise mit den folgenden Daten",
                 paymentDetailsHint: "Kopiere die Daten genau so, wie sie auf dieser Seite stehen.",
                 bank: "Bank",
-                account: "Karte / Konto",
+                account: "IBAN",
                 receiver: "Empfänger",
                 copyAction: "Kopieren",
                 copied: "Kopiert",
@@ -562,12 +544,14 @@
                 close: "Fermer",
                 invalidTitle: "Ce lien de paiement est incomplet",
                 invalidText: "Demandez à votre manager un lien valide avec le montant déjà inclus.",
+                missingManagerTitle: "Cette page de paiement n'est pas disponible",
+                missingManagerText: "Ce lien ne peut pas encore etre utilise car aucun contact manager n'est configure.",
                 bankTransfer: "Virement bancaire",
                 paymentPurpose: "Objet du paiement",
-                paymentComment: "Commentaire du paiement",
-                timerLabel: "Les coordonnées seront actualisées dans",
+                paymentComment: "Important !",
+                timerLabel: "Les coordonnees seront actualisees dans",
                 timerLive: "Actif",
-                timerText: "Quand le minuteur atteint zéro, la page se recharge avec les coordonnées les plus récentes.",
+                timerText: "Quand le minuteur se termine, la page se recharge et de nouvelles coordonnees bancaires apparaitront.",
                 clientSection: "Données du payeur",
                 clientTitle: "Saisissez votre prénom et votre nom",
                 clientHint: "Ces données sont enregistrées avec cette demande de paiement.",
@@ -583,7 +567,7 @@
                 paymentDetailsTitle: "Effectuez le virement avec les coordonnées ci-dessous",
                 paymentDetailsHint: "Copiez les coordonnées exactement comme elles apparaissent sur cette page.",
                 bank: "Banque",
-                account: "Carte / compte",
+                account: "IBAN",
                 receiver: "Bénéficiaire",
                 copyAction: "Copier",
                 copied: "Copié",
@@ -602,6 +586,7 @@
                 currentLang: "en",
                 recommendedLanguage: "en",
                 mode: "invalid",
+                invalidReason: "",
                 visitor: {},
                 visitToken: "",
                 copyMessage: "",
@@ -626,6 +611,7 @@
                 requisites: {
                     bank_name: "Dream Team Pay",
                     card_number: "0000 0000 0000 0000",
+                    bic_swift: "",
                     receiver_name: "Payment Operations",
                     created_at: null
                 },
@@ -643,6 +629,7 @@
                 async init() {
                     const context = await this.fetchContext();
                     this.mode = context.mode || "invalid";
+                    this.invalidReason = String(context.invalid_reason || "");
                     this.geo = context.geo || this.geo;
                     this.requisites = context.requisites || this.requisites;
                     this.payment = context.payment || this.payment;
@@ -715,6 +702,18 @@
                 changeLanguage(languageCode) {
                     this.applyLanguage(languageCode);
                     this.showLanguages = false;
+                },
+
+                resolvedInvalidTitle() {
+                    return this.invalidReason === "manager_missing"
+                        ? this.copy.missingManagerTitle
+                        : this.copy.invalidTitle;
+                },
+
+                resolvedInvalidText() {
+                    return this.invalidReason === "manager_missing"
+                        ? this.copy.missingManagerText
+                        : this.copy.invalidText;
                 },
 
                 languageLabel(code) {

@@ -77,17 +77,12 @@
                     <div x-show="loginError" x-cloak class="rounded-2xl bg-red-500/10 px-4 py-4 text-sm text-red-300" x-text="loginError"></div>
 
                     <div class="rounded-2xl bg-white/5 px-4 py-4 text-sm text-zinc-300">
-                        <p x-show="isLocalAccessMode()" x-cloak>
-                            Локальный вход: логин <span class="font-mono">telegram-dream-team</span>, пароль <span class="font-mono">12345qwert!@#$%QWERT</span>.
-                        </p>
-                        <p x-show="!isLocalAccessMode()" x-cloak>
+                        <p>
                             Для входа используются переменные окружения <span class="font-mono">ADMIN_USERNAME</span> и <span class="font-mono">ADMIN_PASSWORD</span>.
                         </p>
-                        <div x-show="isLocalAccessMode()" x-cloak class="mt-3 flex flex-wrap gap-2">
-                            <button type="button" @click="fillLocalCredentials()" class="rounded-full border border-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white">
-                                Подставить локальные доступы
-                            </button>
-                        </div>
+                        <p x-show="authConfigured === false" x-cloak class="mt-3 text-amber-300">
+                            Вход отключен, пока на сервере не заданы безопасные доступы.
+                        </p>
                     </div>
 
                     <button type="submit" :disabled="loggingIn" class="w-full rounded-full bg-white px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-black transition hover:-translate-y-0.5 disabled:opacity-60">
@@ -151,8 +146,8 @@
                             <p class="mt-2 text-lg font-semibold" x-text="boolText(dashboard.bot?.enabled)"></p>
                         </div>
                         <div class="rounded-[1.4rem] bg-white/5 p-4">
-                            <p class="text-sm text-zinc-400">Админов бота</p>
-                            <p class="mt-2 text-lg font-semibold" x-text="dashboard.bot?.admin_count || 0"></p>
+                            <p class="text-sm text-zinc-400">Пользователей бота</p>
+                            <p class="mt-2 text-lg font-semibold" x-text="dashboard.bot?.user_count || 0"></p>
                         </div>
                         <div class="rounded-[1.4rem] bg-white/5 p-4">
                             <p class="text-sm text-zinc-400">Runtime запущен</p>
@@ -162,9 +157,21 @@
                             <p class="text-sm text-zinc-400">Polling активен</p>
                             <p class="mt-2 text-lg font-semibold" x-text="boolText(dashboard.bot?.updater_running)"></p>
                         </div>
+                        <div class="rounded-[1.4rem] bg-white/5 p-4">
+                            <p class="text-sm text-zinc-400">Админы</p>
+                            <p class="mt-2 text-lg font-semibold" x-text="dashboard.bot?.admin_count || 0"></p>
+                        </div>
+                        <div class="rounded-[1.4rem] bg-white/5 p-4">
+                            <p class="text-sm text-zinc-400">Процессоры / обработчики</p>
+                            <p class="mt-2 text-lg font-semibold" x-text="`${dashboard.bot?.processor_count || 0} / ${dashboard.bot?.handler_count || 0}`"></p>
+                        </div>
                     </div>
 
                     <div x-show="dashboard.bot?.error" x-cloak class="mt-4 rounded-[1.4rem] bg-red-500/10 px-4 py-4 text-sm text-red-300" x-text="dashboard.bot?.error"></div>
+                    <div class="mt-4 rounded-[1.4rem] bg-white/5 px-4 py-4 text-sm text-zinc-400 break-all">
+                        <span class="text-zinc-500">Файл базы:</span>
+                        <span x-text="dashboard.db_path || 'не определён'"></span>
+                    </div>
                 </section>
 
                 <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
@@ -174,7 +181,7 @@
                         <div class="grid gap-4 sm:grid-cols-2">
                             <label class="block">
                                 <span class="mb-2 block text-sm text-zinc-400">GEO</span>
-                                <select x-model="linkForm.geo_code" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                <select x-model="linkForm.geo_code" @change="syncLinkSelections()" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
                                     <template x-for="geo in geos()" :key="geo.profile.geo_code">
                                         <option :value="geo.profile.geo_code" x-text="geo.profile.geo_code"></option>
                                     </template>
@@ -183,6 +190,26 @@
                             <label class="block">
                                 <span class="mb-2 block text-sm text-zinc-400">Сумма</span>
                                 <input type="text" x-model="linkForm.amount" class="input-shell w-full rounded-2xl px-4 py-4 outline-none" placeholder="250">
+                            </label>
+                        </div>
+                        <div class="grid gap-4 sm:grid-cols-2">
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">Язык лендинга</span>
+                                <select x-model="linkForm.language_code" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                    <option value="auto">Авто по устройству / IP</option>
+                                    <template x-for="language in languageOptions()" :key="language.code">
+                                        <option :value="language.code" x-text="`${language.label} (${language.code})`"></option>
+                                    </template>
+                                </select>
+                            </label>
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">Реквизиты для ссылки</span>
+                                <select x-model="linkForm.requisites_id" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                    <option value="latest">Текущие активные</option>
+                                    <template x-for="item in requisitesOptionsForGeo(linkForm.geo_code)" :key="item.id">
+                                        <option :value="String(item.id)" x-text="requisitesOptionLabel(item)"></option>
+                                    </template>
+                                </select>
                             </label>
                         </div>
                         <label class="block">
@@ -232,7 +259,8 @@
                             </div>
                             <div class="mt-4 space-y-2 text-sm text-zinc-300">
                                 <p><span class="text-zinc-500">Банк:</span> <span x-text="geo.active_requisites.bank_name"></span></p>
-                                <p><span class="text-zinc-500">Счёт:</span> <span class="font-mono text-xs" x-text="geo.active_requisites.card_number"></span></p>
+                                <p><span class="text-zinc-500">IBAN:</span> <span class="font-mono text-xs" x-text="geo.active_requisites.card_number"></span></p>
+                                <p><span class="text-zinc-500">BIC / SWIFT:</span> <span class="font-mono text-xs" x-text="geo.active_requisites.bic_swift || 'не указан'"></span></p>
                                 <p><span class="text-zinc-500">Менеджер:</span> <span x-text="geo.profile.manager_name"></span></p>
                                 <p><span class="text-zinc-500">Таймер:</span> <span x-text="`${geo.profile.refresh_minutes} мин`"></span></p>
                             </div>
@@ -283,14 +311,18 @@
                             <input type="number" min="1" max="120" x-model="geoForm.refresh_minutes" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
                         </label>
 
-                        <div class="grid gap-4 sm:grid-cols-3">
+                        <div class="grid gap-4 sm:grid-cols-4">
                             <label class="block">
                                 <span class="mb-2 block text-sm text-zinc-400">Банк</span>
                                 <input type="text" x-model="geoForm.bank_name" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
                             </label>
                             <label class="block">
-                                <span class="mb-2 block text-sm text-zinc-400">Карта / счёт</span>
+                                <span class="mb-2 block text-sm text-zinc-400">IBAN</span>
                                 <input type="text" x-model="geoForm.card_number" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                            </label>
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">BIC / SWIFT</span>
+                                <input type="text" x-model="geoForm.bic_swift" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
                             </label>
                             <label class="block">
                                 <span class="mb-2 block text-sm text-zinc-400">Получатель</span>
@@ -360,9 +392,120 @@
                                         <p><span class="text-zinc-500">Telegram:</span> <span x-text="currentGeoSnapshot().profile.manager_telegram_url || 'не задан'"></span></p>
                                         <p><span class="text-zinc-500">Таймер:</span> <span x-text="`${currentGeoSnapshot().profile.refresh_minutes} мин`"></span></p>
                                         <p><span class="text-zinc-500">Банк:</span> <span x-text="currentGeoSnapshot().active_requisites.bank_name"></span></p>
+                                        <p><span class="text-zinc-500">IBAN:</span> <span class="font-mono text-xs" x-text="currentGeoSnapshot().active_requisites.card_number"></span></p>
+                                        <p><span class="text-zinc-500">BIC / SWIFT:</span> <span class="font-mono text-xs" x-text="currentGeoSnapshot().active_requisites.bic_swift || 'не указан'"></span></p>
                                     </div>
                                 </div>
                             </template>
+                        </div>
+                    </section>
+
+                    <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+                        <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Access control</p>
+                        <h2 class="mt-2 text-xl font-semibold">Роли в Telegram-боте</h2>
+                        <p class="mt-3 text-sm text-zinc-400">
+                            Обработчик: только ссылки. Процессор: только реквизиты. Админ: полный доступ.
+                        </p>
+
+                        <form class="mt-5 space-y-4" @submit.prevent="saveBotUser">
+                            <div class="grid gap-4 sm:grid-cols-2">
+                                <label class="block">
+                                    <span class="mb-2 block text-sm text-zinc-400">Telegram ID</span>
+                                    <input type="number" min="1" x-model="botUserForm.user_id" class="input-shell w-full rounded-2xl px-4 py-4 outline-none" placeholder="123456789">
+                                </label>
+                                <label class="block">
+                                    <span class="mb-2 block text-sm text-zinc-400">Роль</span>
+                                    <select x-model="botUserForm.role" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                        <template x-for="role in botRoleOptions()" :key="role.code">
+                                            <option :value="role.code" x-text="role.label"></option>
+                                        </template>
+                                    </select>
+                                </label>
+                            </div>
+
+                            <div x-show="botUserMessage" x-cloak class="rounded-2xl bg-white/5 px-4 py-4 text-sm text-zinc-300" x-text="botUserMessage"></div>
+
+                            <div class="flex flex-wrap gap-2">
+                                <button type="submit" class="rounded-full bg-white px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-black">Сохранить роль</button>
+                                <button type="button" @click="resetBotUserForm()" class="rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Очистить</button>
+                            </div>
+                        </form>
+
+                        <div class="mt-5 space-y-3">
+                            <template x-for="item in botUsers()" :key="item.user_id">
+                                <div class="rounded-[1.4rem] bg-white/5 p-4">
+                                    <div class="flex flex-wrap items-center justify-between gap-3">
+                                        <div>
+                                            <div class="text-sm font-semibold" x-text="item.full_name || item.username || 'Без имени'"></div>
+                                            <div class="mt-1 text-xs text-zinc-500" x-text="`ID: ${item.user_id}`"></div>
+                                            <a x-show="item.username" x-cloak :href="`https://t.me/${item.username}`" target="_blank" rel="noreferrer"
+                                               class="mt-1 inline-block text-xs text-sky-300 hover:text-sky-200"
+                                               x-text="`@${item.username}`"></a>
+                                            <div x-show="!item.username" x-cloak class="mt-1 text-xs text-zinc-400">username не задан</div>
+                                        </div>
+                                        <div class="flex flex-wrap gap-2">
+                                            <span class="rounded-full bg-white/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200" x-text="formatRoleLabel(item.role)"></span>
+                                            <button type="button" @click="editBotUser(item)" class="rounded-full border border-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white">Изменить</button>
+                                            <button type="button" @click="deleteBotUser(item.user_id)" class="rounded-full border border-red-500/30 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-red-300">Удалить</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </section>
+
+                    <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+                        <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Workers</p>
+                        <h2 class="mt-2 text-xl font-semibold">Сотрудники и их действия</h2>
+                        <p class="mt-3 text-sm text-zinc-400">
+                            Тут видно, кто работает в боте, какие у него контакты и что он делал в системе.
+                        </p>
+
+                        <div class="mt-5 space-y-3">
+                            <template x-for="item in workerStats()" :key="item.user_id">
+                                <div class="rounded-[1.4rem] bg-white/5 p-4">
+                                    <div class="flex flex-wrap items-start justify-between gap-4">
+                                        <div>
+                                            <div class="text-sm font-semibold" x-text="item.full_name || item.username || 'Без имени'"></div>
+                                            <div class="mt-1 text-xs text-zinc-500" x-text="`ID: ${item.user_id}`"></div>
+                                            <a x-show="item.telegram_url" x-cloak :href="item.telegram_url" target="_blank" rel="noreferrer"
+                                               class="mt-1 inline-block text-xs text-sky-300 hover:text-sky-200"
+                                               x-text="item.username ? `@${item.username}` : item.telegram_url"></a>
+                                        </div>
+                                        <div class="rounded-full bg-white/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200" x-text="formatRoleLabel(item.role)"></div>
+                                    </div>
+                                    <div class="mt-4 grid gap-2 sm:grid-cols-2">
+                                        <div class="rounded-xl bg-black/10 px-3 py-3 text-sm text-zinc-300">Всего действий: <span class="font-semibold" x-text="item.actions_total"></span></div>
+                                        <div class="rounded-xl bg-black/10 px-3 py-3 text-sm text-zinc-300">Ссылок создано: <span class="font-semibold" x-text="item.links_created"></span></div>
+                                        <div class="rounded-xl bg-black/10 px-3 py-3 text-sm text-zinc-300">Реквизиты обновлял: <span class="font-semibold" x-text="item.requisites_updated"></span></div>
+                                        <div class="rounded-xl bg-black/10 px-3 py-3 text-sm text-zinc-300">Восстановлений / удалений: <span class="font-semibold" x-text="`${item.requisites_restored} / ${item.requisites_deleted}`"></span></div>
+                                    </div>
+                                    <div class="mt-3 text-xs text-zinc-500" x-show="item.last_action_at">
+                                        Последнее действие:
+                                        <span x-text="formatActionLabel(item.last_action_type)"></span>
+                                        •
+                                        <span x-text="formatDate(item.last_action_at)"></span>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+
+                        <div class="mt-6">
+                            <p class="mb-3 text-sm text-zinc-400">Последние действия</p>
+                            <div class="space-y-2">
+                                <template x-for="item in botActivity().slice(0, 12)" :key="item.id">
+                                    <div class="rounded-xl bg-black/10 px-4 py-3 text-sm text-zinc-300">
+                                        <span class="font-semibold" x-text="item.actor_full_name || item.actor_username || item.actor_user_id || 'system'"></span>
+                                        <span class="text-zinc-500"> • </span>
+                                        <span x-text="formatActionLabel(item.action_type)"></span>
+                                        <span x-show="item.geo_code" class="text-zinc-500"> • GEO </span>
+                                        <span x-show="item.geo_code" x-text="item.geo_code"></span>
+                                        <span x-show="item.payload" class="text-zinc-500"> • </span>
+                                        <span x-show="item.payload" x-text="item.payload"></span>
+                                        <div class="mt-1 text-xs text-zinc-500" x-text="formatDate(item.created_at)"></div>
+                                    </div>
+                                </template>
+                            </div>
                         </div>
                     </section>
                 </div>
@@ -401,7 +544,7 @@
                                     <span class="text-zinc-500">Комментарий:</span>
                                     <span x-text="visit.payment_comment"></span>
                                 </div>
-                                <div class="mt-3 rounded-[1rem] bg-white/5 p-3" x-show="visit.snapshot_bank_name || visit.snapshot_card_number || visit.snapshot_receiver_name">
+                                <div class="mt-3 rounded-[1rem] bg-white/5 p-3" x-show="visit.snapshot_bank_name || visit.snapshot_card_number || visit.snapshot_bic_swift || visit.snapshot_receiver_name">
                                     <p class="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Реквизиты, показанные клиенту</p>
                                     <div class="mt-3 space-y-2 text-sm text-zinc-300">
                                         <p x-show="visit.snapshot_bank_name">
@@ -409,8 +552,12 @@
                                             <span x-text="visit.snapshot_bank_name"></span>
                                         </p>
                                         <p x-show="visit.snapshot_card_number">
-                                            <span class="text-zinc-500">Карта / счёт:</span>
+                                            <span class="text-zinc-500">IBAN:</span>
                                             <span class="font-mono text-xs" x-text="visit.snapshot_card_number"></span>
+                                        </p>
+                                        <p x-show="visit.snapshot_bic_swift">
+                                            <span class="text-zinc-500">BIC / SWIFT:</span>
+                                            <span class="font-mono text-xs" x-text="visit.snapshot_bic_swift"></span>
                                         </p>
                                         <p x-show="visit.snapshot_receiver_name">
                                             <span class="text-zinc-500">Получатель:</span>
@@ -432,6 +579,9 @@
                 <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
                     <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Requisites history</p>
                     <h2 class="mt-2 text-xl font-semibold">История реквизитов</h2>
+                    <p class="mt-3 text-sm text-zinc-400">
+                        Старые рабочие реквизиты можно снова сделать активными одним нажатием, без ручного ввода.
+                    </p>
 
                     <div class="mt-5 space-y-3">
                         <template x-for="item in dashboard.requisites_history || []" :key="item.id">
@@ -444,7 +594,21 @@
                                     <div class="text-xs text-zinc-500" x-text="formatDate(item.created_at)"></div>
                                 </div>
                                 <div class="mt-2 font-mono text-xs text-zinc-300" x-text="item.card_number"></div>
+                                <div class="mt-2 font-mono text-xs text-zinc-400" x-text="item.bic_swift || 'BIC / SWIFT не указан'"></div>
                                 <div class="mt-2 text-sm text-zinc-400" x-text="item.receiver_name"></div>
+                                <div class="mt-2 text-xs text-zinc-500">ID снимка: <span x-text="item.id"></span></div>
+                                <div class="mt-3 flex flex-wrap gap-2">
+                                    <button type="button"
+                                            @click="applyHistoryItem(item)"
+                                            class="rounded-full border border-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-white hover:text-black">
+                                        Сделать активными
+                                    </button>
+                                    <button type="button"
+                                            @click="deleteHistoryItem(item)"
+                                            class="rounded-full border border-red-500/30 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-red-300">
+                                        Удалить
+                                    </button>
+                                </div>
                             </div>
                         </template>
                     </div>
@@ -457,16 +621,11 @@
         const ADMIN_APP_BASE_URL = window.location.protocol.startsWith("http")
             ? window.location.origin
             : "http://127.0.0.1:8000";
-        const LOCAL_ADMIN_CREDENTIALS = {
-            username: "telegram-dream-team",
-            password: "12345qwert!@#$%QWERT"
-        };
-        const LOCAL_ACCESS_HOSTS = new Set(["127.0.0.1", "localhost"]);
-
         function adminApp() {
             return {
                 checkingSession: true,
                 authenticated: false,
+                authConfigured: null,
                 loggingIn: false,
                 loginError: "",
                 dashboard: {},
@@ -482,6 +641,8 @@
                 linkForm: {
                     geo_code: "ES",
                     amount: "",
+                    language_code: "auto",
+                    requisites_id: "latest",
                     label: "",
                     comment: ""
                 },
@@ -493,29 +654,22 @@
                     refresh_minutes: 15,
                     bank_name: "",
                     card_number: "",
+                    bic_swift: "",
                     receiver_name: ""
+                },
+                botUserMessage: "",
+                botUserForm: {
+                    user_id: "",
+                    role: "handler"
                 },
 
                 async init() {
-                    this.fillLocalCredentials();
                     await this.checkSession();
                     if (this.authenticated) {
                         await this.refreshDashboard();
                         this.startAutorefresh();
                     }
                     this.checkingSession = false;
-                },
-
-                isLocalAccessMode() {
-                    return window.location.protocol === "file:" || LOCAL_ACCESS_HOSTS.has(window.location.hostname);
-                },
-
-                fillLocalCredentials() {
-                    if (!this.isLocalAccessMode()) {
-                        return;
-                    }
-                    this.loginForm.username = LOCAL_ADMIN_CREDENTIALS.username;
-                    this.loginForm.password = LOCAL_ADMIN_CREDENTIALS.password;
                 },
 
                 geos() {
@@ -526,6 +680,22 @@
                     return this.dashboard.languages || [];
                 },
 
+                botUsers() {
+                    return this.dashboard.bot_users || [];
+                },
+
+                workerStats() {
+                    return this.dashboard.worker_stats || [];
+                },
+
+                botActivity() {
+                    return this.dashboard.bot_activity || [];
+                },
+
+                botRoleOptions() {
+                    return this.dashboard.bot_roles || [];
+                },
+
                 currentGeoSnapshot() {
                     return this.geos().find((item) => item.profile.geo_code === this.editingGeoCode) || null;
                 },
@@ -534,6 +704,7 @@
                     this.editingGeoCode = code;
                     this.linkForm.geo_code = code;
                     this.syncGeoForm();
+                    this.syncLinkSelections();
                 },
 
                 syncGeoForm() {
@@ -549,8 +720,36 @@
                         refresh_minutes: current.profile.refresh_minutes || 15,
                         bank_name: current.active_requisites?.bank_name || "",
                         card_number: current.active_requisites?.card_number || "",
+                        bic_swift: current.active_requisites?.bic_swift || "",
                         receiver_name: current.active_requisites?.receiver_name || ""
                     };
+                },
+
+                requisitesOptionsForGeo(geoCode) {
+                    return (this.dashboard.requisites_history || [])
+                        .filter((item) => item.geo_code === geoCode);
+                },
+
+                requisitesOptionLabel(item) {
+                    const parts = [
+                        `ID ${item.id}`,
+                        item.bank_name || "",
+                        item.card_number || "",
+                        item.bic_swift || "без BIC/SWIFT"
+                    ].filter(Boolean);
+                    return parts.join(" | ");
+                },
+
+                syncLinkSelections() {
+                    const options = this.requisitesOptionsForGeo(this.linkForm.geo_code || this.editingGeoCode);
+                    const selected = String(this.linkForm.requisites_id || "latest");
+                    if (selected === "latest") {
+                        return;
+                    }
+                    const exists = options.some((item) => String(item.id) === selected);
+                    if (!exists) {
+                        this.linkForm.requisites_id = "latest";
+                    }
                 },
 
                 async checkSession() {
@@ -558,8 +757,10 @@
                         const response = await fetch(this.apiUrl("/api/admin/session"), { credentials: "include" });
                         const data = await response.json();
                         this.authenticated = Boolean(data.authenticated);
+                        this.authConfigured = data.configured !== false;
                     } catch (error) {
                         this.authenticated = false;
+                        this.authConfigured = null;
                     }
                 },
 
@@ -620,6 +821,7 @@
                             this.linkForm.geo_code = this.geos()[0].profile.geo_code;
                         }
                         this.syncGeoForm();
+                        this.syncLinkSelections();
                     } catch (error) {
                         console.error(error);
                     }
@@ -651,7 +853,7 @@
                     }
                 },
 
-                async saveGeo() {
+                async saveGeo(successMessage = null) {
                     this.geoMessage = "";
                     try {
                         const response = await fetch(this.apiUrl(`/api/admin/geos/${this.editingGeoCode}`), {
@@ -664,10 +866,55 @@
                         if (!response.ok) {
                             throw new Error(data.detail || "Не удалось сохранить GEO");
                         }
-                        this.geoMessage = `GEO ${this.editingGeoCode} обновлён`;
+                        this.geoMessage = successMessage || `GEO ${this.editingGeoCode} обновлён`;
                         await this.refreshDashboard();
                     } catch (error) {
                         this.geoMessage = error.message || "Не удалось сохранить GEO";
+                    }
+                },
+
+                async applyHistoryItem(item) {
+                    if (!item || !item.geo_code) {
+                        return;
+                    }
+                    try {
+                        const response = await fetch(this.apiUrl(`/api/admin/requisites/${item.geo_code}/history/${item.id}/activate`), {
+                            method: "POST",
+                            credentials: "include"
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) {
+                            throw new Error(data.detail || "Не удалось активировать реквизиты");
+                        }
+                        this.geoMessage = `Реквизиты из истории ID ${item.id} снова активны для ${item.geo_code}`;
+                        this.selectGeo(item.geo_code);
+                        await this.refreshDashboard();
+                    } catch (error) {
+                        this.geoMessage = error.message || "Не удалось активировать реквизиты";
+                    }
+                },
+
+                async deleteHistoryItem(item) {
+                    if (!item || !item.geo_code) {
+                        return;
+                    }
+                    const shouldDelete = window.confirm(`Удалить реквизиты ID ${item.id} для ${item.geo_code}?`);
+                    if (!shouldDelete) {
+                        return;
+                    }
+                    try {
+                        const response = await fetch(this.apiUrl(`/api/admin/requisites/${item.geo_code}/history/${item.id}`), {
+                            method: "DELETE",
+                            credentials: "include"
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) {
+                            throw new Error(data.detail || "Не удалось удалить реквизиты");
+                        }
+                        this.geoMessage = `Реквизиты ID ${item.id} удалены для ${item.geo_code}`;
+                        await this.refreshDashboard();
+                    } catch (error) {
+                        this.geoMessage = error.message || "Не удалось удалить реквизиты";
                     }
                 },
 
@@ -675,6 +922,11 @@
                     const amount = Number(String(this.linkForm.amount).replace(",", "."));
                     if (!Number.isFinite(amount) || amount <= 0) {
                         this.linkMessage = "Укажите корректную сумму";
+                        return;
+                    }
+                    const currentGeo = this.geos().find((item) => item.profile.geo_code === (this.linkForm.geo_code || this.editingGeoCode));
+                    if (!currentGeo?.profile?.manager_telegram_url) {
+                        this.linkMessage = "Ссылку нельзя создать: у выбранного GEO не задан контакт менеджера";
                         return;
                     }
 
@@ -688,9 +940,12 @@
                     const url = new URL(this.dashboard.web_url || window.location.origin);
                     url.searchParams.set("payment", this.formatQueryAmount(amount));
                     url.searchParams.set("geo", this.linkForm.geo_code || this.editingGeoCode);
-                    const currentGeo = this.geos().find((item) => item.profile.geo_code === (this.linkForm.geo_code || this.editingGeoCode));
-                    const lang = currentGeo?.profile?.default_language || "en";
-                    url.searchParams.set("lang", lang);
+                    if (this.linkForm.language_code && this.linkForm.language_code !== "auto") {
+                        url.searchParams.set("lang", this.linkForm.language_code);
+                    }
+                    if (this.linkForm.requisites_id && this.linkForm.requisites_id !== "latest") {
+                        url.searchParams.set("req", this.linkForm.requisites_id);
+                    }
                     if (rawLabel) {
                         url.searchParams.set("label", rawLabel.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/-{2,}/g, "-").replace(/^-|-$/g, ""));
                     }
@@ -702,6 +957,88 @@
 
                 formatQueryAmount(amount) {
                     return Number(amount).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+                },
+
+                formatRoleLabel(roleCode) {
+                    const found = this.botRoleOptions().find((item) => item.code === roleCode);
+                    return found ? found.label : roleCode;
+                },
+
+                formatActionLabel(actionType) {
+                    const labels = {
+                        create_link: "создание ссылки",
+                        update_requisites: "обновление реквизитов",
+                        restore_requisites: "восстановление реквизитов",
+                        delete_requisites: "удаление реквизитов",
+                        update_manager: "обновление менеджера",
+                        set_role: "изменение роли",
+                        remove_user: "удаление пользователя",
+                        select_geo: "смена GEO"
+                    };
+                    return labels[actionType] || actionType || "—";
+                },
+
+                editBotUser(item) {
+                    this.botUserForm.user_id = String(item?.user_id || "");
+                    this.botUserForm.role = item?.role || "handler";
+                    this.botUserMessage = "";
+                },
+
+                resetBotUserForm() {
+                    this.botUserForm.user_id = "";
+                    this.botUserForm.role = "handler";
+                    this.botUserMessage = "";
+                },
+
+                async saveBotUser() {
+                    const userId = Number(this.botUserForm.user_id);
+                    if (!Number.isInteger(userId) || userId <= 0) {
+                        this.botUserMessage = "Укажите корректный Telegram ID";
+                        return;
+                    }
+                    try {
+                        const response = await fetch(this.apiUrl("/api/admin/bot-users"), {
+                            method: "POST",
+                            credentials: "include",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                user_id: userId,
+                                role: this.botUserForm.role
+                            })
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) {
+                            throw new Error(data.detail || "Не удалось сохранить роль");
+                        }
+                        this.botUserMessage = `Права для ${userId} сохранены`;
+                        await this.refreshDashboard();
+                    } catch (error) {
+                        this.botUserMessage = error.message || "Не удалось сохранить роль";
+                    }
+                },
+
+                async deleteBotUser(userId) {
+                    if (!userId) {
+                        return;
+                    }
+                    const shouldDelete = window.confirm(`Удалить пользователя ${userId} из бота?`);
+                    if (!shouldDelete) {
+                        return;
+                    }
+                    try {
+                        const response = await fetch(this.apiUrl(`/api/admin/bot-users/${userId}`), {
+                            method: "DELETE",
+                            credentials: "include"
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) {
+                            throw new Error(data.detail || "Не удалось удалить пользователя");
+                        }
+                        this.botUserMessage = data.message || `Пользователь ${userId} удален`;
+                        await this.refreshDashboard();
+                    } catch (error) {
+                        this.botUserMessage = error.message || "Не удалось удалить пользователя";
+                    }
                 },
 
                 statCards() {
