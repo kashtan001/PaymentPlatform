@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -68,9 +68,11 @@ WAITING_LINK_AMOUNT = 4
 WAITING_LINK_LABEL = 5
 WAITING_LINK_COMMENT = 6
 WAITING_REQUISITES_HISTORY = 7
+WAITING_REQUISITES_DELETE = 8
 
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "telegram-dream-team")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "12345qwert!@#$%QWERT")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip()
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
+ADMIN_AUTH_CONFIGURED = bool(ADMIN_USERNAME and ADMIN_PASSWORD)
 SESSION_COOKIE_NAME = "payment_admin_session"
 SESSION_TTL_HOURS = 12
 DEFAULT_ADMIN_PANEL_URL = "https://paymentplatform-production-8de8.up.railway.app/admin"
@@ -80,16 +82,40 @@ ADMIN_SESSIONS: dict[str, datetime] = {}
 GEO_CACHE: dict[str, dict[str, Any]] = {}
 BOT_RUNTIME_STARTED = False
 BOT_RUNTIME_ERROR: str | None = None
+LOGIN_ATTEMPTS: dict[str, list[datetime]] = {}
+LOGIN_WINDOW_MINUTES = 10
+MAX_LOGIN_ATTEMPTS = 5
 
 LANGUAGE_OPTIONS = [
     {"code": "en", "label": "English"},
-    {"code": "ru", "label": "Русский"},
     {"code": "es", "label": "Español"},
     {"code": "it", "label": "Italiano"},
     {"code": "de", "label": "Deutsch"},
     {"code": "fr", "label": "Français"},
 ]
 LANDING_LANGUAGE_SET = {item["code"] for item in LANGUAGE_OPTIONS}
+BOT_ROLE_OPTIONS = [
+    {"code": "handler", "label": "Обработчик"},
+    {"code": "processor", "label": "Процессор"},
+    {"code": "admin", "label": "Админ"},
+]
+BOT_ROLE_SET = {item["code"] for item in BOT_ROLE_OPTIONS}
+BOT_ROLE_LABELS = {item["code"]: item["label"] for item in BOT_ROLE_OPTIONS}
+BOT_ROLE_PERMISSIONS = {
+    "handler": {"select_geo", "view_geo", "create_link"},
+    "processor": {"select_geo", "view_geo", "edit_requisites", "view_requisites_history", "delete_requisites"},
+    "admin": {
+        "select_geo",
+        "view_geo",
+        "edit_requisites",
+        "view_requisites_history",
+        "delete_requisites",
+        "edit_manager",
+        "manage_access",
+        "create_link",
+        "open_admin_panel",
+    },
+}
 LANGUAGE_TO_GEO_MAP = {
     "es": "ES",
     "ca": "ES",
@@ -150,6 +176,7 @@ class GeoConfigPayload(BaseModel):
     refresh_minutes: int
     bank_name: str
     card_number: str
+    bic_swift: str = ""
     receiver_name: str
 
 
@@ -157,6 +184,11 @@ class LandingClientPayload(BaseModel):
     visit_token: str
     first_name: str
     last_name: str
+
+
+class BotUserPayload(BaseModel):
+    user_id: int
+    role: str
 
 
 def utc_now() -> datetime:
@@ -199,6 +231,20 @@ def sanitize_geo_code(value: str | None) -> str | None:
 def sanitize_language_code(value: str | None) -> str | None:
     code = (value or "").strip().lower()
     return code if code in LANDING_LANGUAGE_SET else None
+
+
+def sanitize_bot_role(value: str | None, default: str = "handler") -> str:
+    code = (value or "").strip().lower()
+    return code if code in BOT_ROLE_SET else default
+
+
+def get_bot_role_label(role: str | None) -> str:
+    return BOT_ROLE_LABELS.get(sanitize_bot_role(role, "handler"), "Обработчик")
+
+
+def bot_role_has_permission(role: str | None, permission: str) -> bool:
+    safe_role = sanitize_bot_role(role, "handler")
+    return permission in BOT_ROLE_PERMISSIONS.get(safe_role, set())
 
 
 def normalize_language_code(value: str | None) -> str | None:
@@ -245,6 +291,11 @@ def normalize_manager_link(raw_value: str | None) -> str:
     return value
 
 
+def has_manager_contact(geo_code: str) -> bool:
+    profile = get_geo_profile(geo_code)
+    return bool(normalize_manager_link(profile.get("manager_telegram_url")))
+
+
 def clean_payment_comment(raw_value: str | None) -> str:
     value = re.sub(r"\s+", " ", (raw_value or "").strip())
     return value[:300]
@@ -269,26 +320,37 @@ def format_query_amount(amount: float) -> str:
     return f"{amount:.2f}".rstrip("0").rstrip(".")
 
 
-def build_payment_link(amount: float, geo_code: str, label: str = "", comment: str = "") -> str:
+def build_payment_link(
+    amount: float,
+    geo_code: str,
+    label: str = "",
+    comment: str = "",
+    forced_language: str | None = None,
+    requisites_id: int | None = None,
+) -> str:
     safe_geo = sanitize_geo_code(geo_code) or "ES"
-    geo_profile = get_geo_profile(safe_geo)
+    if not has_manager_contact(safe_geo):
+        raise HTTPException(status_code=400, detail=f"Для GEO {safe_geo} не задан контакт менеджера")
     params = {
         "payment": format_query_amount(amount),
         "geo": safe_geo,
-        "lang": sanitize_language_code(geo_profile.get("default_language")) or "en",
     }
     clean_label = sanitize_payment_label(label)
     clean_comment = clean_payment_comment(comment)
+    safe_language = sanitize_language_code(forced_language)
     if clean_label:
         params["label"] = clean_label
     if clean_comment:
         params["comment"] = clean_comment
+    if safe_language:
+        params["lang"] = safe_language
+    if requisites_id is not None and requisites_id > 0:
+        params["req"] = str(requisites_id)
     return f"{WEB_URL}/?{urlencode(params)}"
 
 
 def build_admin_panel_link() -> str:
-    separator = "&" if "?" in ADMIN_PANEL_URL else "?"
-    return f"{ADMIN_PANEL_URL}{separator}autologin=1"
+    return ADMIN_PANEL_URL
 
 
 def resolve_geo_code(requested_geo: str | None, country_code: str | None, browser_language: str | None) -> str:
@@ -307,6 +369,29 @@ def resolve_geo_code(requested_geo: str | None, country_code: str | None, browse
     return "ES"
 
 
+def resolve_recommended_language(
+    explicit_language: str | None,
+    browser_language: str | None,
+    country_code: str | None,
+    geo_default_language: str | None,
+) -> str:
+    forced_language = sanitize_language_code(explicit_language)
+    if forced_language:
+        return forced_language
+
+    browser_safe = sanitize_language_code(browser_language)
+    if browser_safe:
+        return browser_safe
+
+    country_geo = sanitize_geo_code(country_code)
+    if country_geo:
+        country_default = sanitize_language_code(get_geo_profile(country_geo).get("default_language"))
+        if country_default:
+            return country_default
+
+    return sanitize_language_code(geo_default_language) or "en"
+
+
 def legacy_seed_requisites(conn: sqlite3.Connection) -> dict[str, str]:
     if table_exists(conn, "requisites"):
         row = conn.execute(
@@ -322,6 +407,7 @@ def legacy_seed_requisites(conn: sqlite3.Connection) -> dict[str, str]:
     return {
         "bank_name": "Dream Team Pay",
         "card_number": "0000 0000 0000 0000",
+        "bic_swift": "",
         "receiver_name": "Payment Operations",
     }
 
@@ -356,13 +442,14 @@ def seed_geo_data(conn: sqlite3.Connection) -> None:
         if row and row["value"] == 0:
             conn.execute(
                 """
-                INSERT INTO geo_requisites (geo_code, bank_name, card_number, receiver_name, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO geo_requisites (geo_code, bank_name, card_number, bic_swift, receiver_name, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     geo_code,
                     default_requisites["bank_name"],
                     default_requisites["card_number"],
+                    default_requisites["bic_swift"],
                     default_requisites["receiver_name"],
                     now_value,
                 ),
@@ -374,10 +461,11 @@ def seed_bot_admins(conn: sqlite3.Connection) -> None:
     for admin_id in sorted(INITIAL_ADMIN_IDS):
         conn.execute(
             """
-            INSERT OR IGNORE INTO bot_admins (user_id, username, full_name, added_at, added_by)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO bot_admins (user_id, username, full_name, role, added_at, added_by)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET role = excluded.role
             """,
-            (admin_id, "", "", now_value, admin_id),
+            (admin_id, "", "", "admin", now_value, admin_id),
         )
 
 
@@ -389,6 +477,7 @@ def init_db() -> None:
             user_id INTEGER PRIMARY KEY,
             username TEXT,
             full_name TEXT,
+            role TEXT NOT NULL DEFAULT 'admin',
             added_at TEXT,
             added_by INTEGER
         )
@@ -423,6 +512,7 @@ def init_db() -> None:
             geo_code TEXT NOT NULL,
             bank_name TEXT NOT NULL,
             card_number TEXT NOT NULL,
+            bic_swift TEXT DEFAULT '',
             receiver_name TEXT NOT NULL,
             created_at TEXT
         )
@@ -470,8 +560,11 @@ def init_db() -> None:
     ensure_column(conn, "visits", "requisites_id", "INTEGER")
     ensure_column(conn, "visits", "snapshot_bank_name", "TEXT")
     ensure_column(conn, "visits", "snapshot_card_number", "TEXT")
+    ensure_column(conn, "visits", "snapshot_bic_swift", "TEXT")
     ensure_column(conn, "visits", "snapshot_receiver_name", "TEXT")
     ensure_column(conn, "visits", "payment_comment", "TEXT")
+    ensure_column(conn, "bot_admins", "role", "TEXT NOT NULL DEFAULT 'admin'")
+    ensure_column(conn, "geo_requisites", "bic_swift", "TEXT DEFAULT ''")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_visits_visit_token
@@ -534,7 +627,7 @@ def get_active_requisites(geo_code: str) -> dict[str, Any]:
     conn = get_connection()
     row = conn.execute(
         """
-        SELECT id, geo_code, bank_name, card_number, receiver_name, created_at
+        SELECT id, geo_code, bank_name, card_number, bic_swift, receiver_name, created_at
         FROM geo_requisites
         WHERE geo_code = ?
         ORDER BY id DESC
@@ -554,9 +647,35 @@ def get_active_requisites(geo_code: str) -> dict[str, Any]:
         "geo_code": safe_geo,
         "bank_name": defaults["bank_name"],
         "card_number": defaults["card_number"],
+        "bic_swift": defaults["bic_swift"],
         "receiver_name": defaults["receiver_name"],
         "created_at": utc_now_iso(),
     }
+
+
+def get_geo_requisites_by_id(geo_code: str, requisites_id: int | None) -> dict[str, Any] | None:
+    safe_geo = sanitize_geo_code(geo_code) or "ES"
+    if requisites_id is None or requisites_id <= 0:
+        return None
+    conn = get_connection()
+    row = conn.execute(
+        """
+        SELECT id, geo_code, bank_name, card_number, bic_swift, receiver_name, created_at
+        FROM geo_requisites
+        WHERE geo_code = ? AND id = ?
+        LIMIT 1
+        """,
+        (safe_geo, requisites_id),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row is not None else None
+
+
+def resolve_requisites_for_geo(geo_code: str, requisites_id: int | None = None) -> dict[str, Any]:
+    chosen = get_geo_requisites_by_id(geo_code, requisites_id)
+    if chosen is not None:
+        return chosen
+    return get_active_requisites(geo_code)
 
 
 def list_geo_snapshots() -> list[dict[str, Any]]:
@@ -573,7 +692,7 @@ def list_geo_requisites_history(limit: int = 40) -> list[dict[str, Any]]:
     conn = get_connection()
     rows = conn.execute(
         """
-        SELECT id, geo_code, bank_name, card_number, receiver_name, created_at
+        SELECT id, geo_code, bank_name, card_number, bic_swift, receiver_name, created_at
         FROM geo_requisites
         ORDER BY id DESC
         LIMIT ?
@@ -589,7 +708,7 @@ def list_geo_requisites_history_for_geo(geo_code: str, limit: int = 8) -> list[d
     conn = get_connection()
     rows = conn.execute(
         """
-        SELECT id, geo_code, bank_name, card_number, receiver_name, created_at
+        SELECT id, geo_code, bank_name, card_number, bic_swift, receiver_name, created_at
         FROM geo_requisites
         WHERE geo_code = ?
         ORDER BY id DESC
@@ -613,6 +732,7 @@ def save_geo_configuration(geo_code: str, payload: GeoConfigPayload) -> dict[str
     refresh_minutes = int(payload.refresh_minutes)
     bank_name = payload.bank_name.strip()
     card_number = payload.card_number.strip()
+    bic_swift = payload.bic_swift.strip()
     receiver_name = payload.receiver_name.strip()
 
     if not bank_name or not card_number or not receiver_name:
@@ -646,7 +766,7 @@ def save_geo_configuration(geo_code: str, payload: GeoConfigPayload) -> dict[str
 
     current_requisites = conn.execute(
         """
-        SELECT bank_name, card_number, receiver_name
+        SELECT bank_name, card_number, bic_swift, receiver_name
         FROM geo_requisites
         WHERE geo_code = ?
         ORDER BY id DESC
@@ -658,14 +778,15 @@ def save_geo_configuration(geo_code: str, payload: GeoConfigPayload) -> dict[str
         current_requisites is None
         or current_requisites["bank_name"] != bank_name
         or current_requisites["card_number"] != card_number
+        or (current_requisites["bic_swift"] or "") != bic_swift
         or current_requisites["receiver_name"] != receiver_name
     ):
         conn.execute(
             """
-            INSERT INTO geo_requisites (geo_code, bank_name, card_number, receiver_name, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO geo_requisites (geo_code, bank_name, card_number, bic_swift, receiver_name, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (safe_geo, bank_name, card_number, receiver_name, utc_now_iso()),
+            (safe_geo, bank_name, card_number, bic_swift, receiver_name, utc_now_iso()),
         )
 
     conn.commit()
@@ -676,21 +797,28 @@ def save_geo_configuration(geo_code: str, payload: GeoConfigPayload) -> dict[str
     }
 
 
-def update_geo_requisites(geo_code: str, bank_name: str, card_number: str, receiver_name: str) -> dict[str, Any]:
+def update_geo_requisites(
+    geo_code: str,
+    bank_name: str,
+    card_number: str,
+    bic_swift: str,
+    receiver_name: str,
+) -> dict[str, Any]:
     safe_geo = sanitize_geo_code(geo_code) or "ES"
     clean_bank = bank_name.strip()
     clean_card = card_number.strip()
+    clean_bic_swift = bic_swift.strip()
     clean_receiver = receiver_name.strip()
     if not clean_bank or not clean_card or not clean_receiver:
-        raise HTTPException(status_code=400, detail="Нужно указать банк, карту/счет и получателя")
+        raise HTTPException(status_code=400, detail="Нужно указать банк, IBAN и получателя")
 
     conn = get_connection()
     conn.execute(
         """
-        INSERT INTO geo_requisites (geo_code, bank_name, card_number, receiver_name, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO geo_requisites (geo_code, bank_name, card_number, bic_swift, receiver_name, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (safe_geo, clean_bank, clean_card, clean_receiver, utc_now_iso()),
+        (safe_geo, clean_bank, clean_card, clean_bic_swift, clean_receiver, utc_now_iso()),
     )
     conn.commit()
     conn.close()
@@ -735,9 +863,9 @@ def record_visit(
             user_agent, accept_language, recommended_language, geo_code, payment_amount,
             payment_label, referrer, page_path, query_string, created_at, visit_token,
             client_first_name, client_last_name, client_saved_at, requisites_id,
-            snapshot_bank_name, snapshot_card_number, snapshot_receiver_name, payment_comment
+            snapshot_bank_name, snapshot_card_number, snapshot_bic_swift, snapshot_receiver_name, payment_comment
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             mode,
@@ -765,6 +893,7 @@ def record_visit(
             requisites.get("id") if requisites else None,
             requisites.get("bank_name") if requisites else None,
             requisites.get("card_number") if requisites else None,
+            requisites.get("bic_swift") if requisites else None,
             requisites.get("receiver_name") if requisites else None,
             payment_comment or None,
         ),
@@ -783,7 +912,7 @@ def list_visits(limit: int = 120) -> list[dict[str, Any]]:
             currency, user_agent, accept_language, recommended_language, geo_code,
             payment_amount, payment_label, referrer, page_path, query_string, created_at,
             visit_token, client_first_name, client_last_name, client_saved_at,
-            requisites_id, snapshot_bank_name, snapshot_card_number, snapshot_receiver_name,
+            requisites_id, snapshot_bank_name, snapshot_card_number, snapshot_bic_swift, snapshot_receiver_name,
             payment_comment
         FROM visits
         ORDER BY id DESC
@@ -799,7 +928,7 @@ def list_bot_admins() -> list[dict[str, Any]]:
     conn = get_connection()
     rows = conn.execute(
         """
-        SELECT user_id, username, full_name, added_at, added_by
+        SELECT user_id, username, full_name, role, added_at, added_by
         FROM bot_admins
         ORDER BY COALESCE(full_name, ''), user_id
         """
@@ -808,21 +937,31 @@ def list_bot_admins() -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def is_bot_admin(user_id: int | None) -> bool:
+def get_bot_user_role(user_id: int | None) -> str | None:
     if user_id is None:
-        return False
+        return None
     conn = get_connection()
     row = conn.execute(
-        "SELECT 1 AS value FROM bot_admins WHERE user_id = ? LIMIT 1",
+        "SELECT role FROM bot_admins WHERE user_id = ? LIMIT 1",
         (user_id,),
     ).fetchone()
     conn.close()
-    return row is not None
+    if row is None:
+        return None
+    return sanitize_bot_role(row["role"], "admin")
+
+
+def is_bot_admin(user_id: int | None) -> bool:
+    return get_bot_user_role(user_id) == "admin"
+
+
+def has_bot_access(user_id: int | None) -> bool:
+    return get_bot_user_role(user_id) is not None
 
 
 def upsert_bot_admin_identity(user: Any) -> None:
     user_id = getattr(user, "id", None)
-    if user_id is None or not is_bot_admin(user_id):
+    if user_id is None or not has_bot_access(user_id):
         return
     username = getattr(user, "username", None) or ""
     full_name = getattr(user, "full_name", None) or getattr(user, "name", None) or ""
@@ -851,28 +990,80 @@ def add_bot_admin(actor_id: int, target_user_id: int) -> bool:
         return False
     conn.execute(
         """
-        INSERT INTO bot_admins (user_id, username, full_name, added_at, added_by)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO bot_admins (user_id, username, full_name, role, added_at, added_by)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (target_user_id, "", "", now_value, actor_id),
+        (target_user_id, "", "", "admin", now_value, actor_id),
     )
     conn.commit()
     conn.close()
     return True
 
 
+def save_bot_user_role(actor_id: int, target_user_id: int, role: str) -> dict[str, Any]:
+    safe_role = sanitize_bot_role(role, "handler")
+    now_value = utc_now_iso()
+    conn = get_connection()
+    existing = conn.execute(
+        "SELECT user_id, role FROM bot_admins WHERE user_id = ? LIMIT 1",
+        (target_user_id,),
+    ).fetchone()
+    if existing is not None and existing["role"] == "admin" and safe_role != "admin":
+        count_row = conn.execute("SELECT COUNT(*) AS value FROM bot_admins WHERE role = 'admin'").fetchone()
+        admins_total = int(count_row["value"]) if count_row else 0
+        if admins_total <= 1:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Нельзя снять роль у последнего администратора")
+    if existing is None:
+        conn.execute(
+            """
+            INSERT INTO bot_admins (user_id, username, full_name, role, added_at, added_by)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (target_user_id, "", "", safe_role, now_value, actor_id),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE bot_admins
+            SET role = ?
+            WHERE user_id = ?
+            """,
+            (safe_role, target_user_id),
+        )
+    conn.commit()
+    row = conn.execute(
+        """
+        SELECT user_id, username, full_name, role, added_at, added_by
+        FROM bot_admins
+        WHERE user_id = ?
+        LIMIT 1
+        """,
+        (target_user_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row is not None else {
+        "user_id": target_user_id,
+        "username": "",
+        "full_name": "",
+        "role": safe_role,
+        "added_at": now_value,
+        "added_by": actor_id,
+    }
+
+
 def remove_bot_admin(target_user_id: int) -> tuple[bool, str]:
     conn = get_connection()
-    count_row = conn.execute("SELECT COUNT(*) AS value FROM bot_admins").fetchone()
+    count_row = conn.execute("SELECT COUNT(*) AS value FROM bot_admins WHERE role = 'admin'").fetchone()
     admins_total = int(count_row["value"]) if count_row else 0
     existing = conn.execute(
-        "SELECT user_id FROM bot_admins WHERE user_id = ? LIMIT 1",
+        "SELECT user_id, role FROM bot_admins WHERE user_id = ? LIMIT 1",
         (target_user_id,),
     ).fetchone()
     if existing is None:
         conn.close()
         return False, "Админ с таким ID не найден."
-    if admins_total <= 1:
+    if existing["role"] == "admin" and admins_total <= 1:
         conn.close()
         return False, "Нельзя удалить последнего администратора."
     conn.execute("DELETE FROM bot_admins WHERE user_id = ?", (target_user_id,))
@@ -924,7 +1115,7 @@ def restore_geo_requisites_from_history(geo_code: str, history_id: int) -> dict[
     conn = get_connection()
     row = conn.execute(
         """
-        SELECT bank_name, card_number, receiver_name
+        SELECT bank_name, card_number, bic_swift, receiver_name
         FROM geo_requisites
         WHERE id = ? AND geo_code = ?
         LIMIT 1
@@ -937,14 +1128,49 @@ def restore_geo_requisites_from_history(geo_code: str, history_id: int) -> dict[
 
     conn.execute(
         """
-        INSERT INTO geo_requisites (geo_code, bank_name, card_number, receiver_name, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO geo_requisites (geo_code, bank_name, card_number, bic_swift, receiver_name, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (safe_geo, row["bank_name"], row["card_number"], row["receiver_name"], utc_now_iso()),
+        (safe_geo, row["bank_name"], row["card_number"], row["bic_swift"], row["receiver_name"], utc_now_iso()),
     )
     conn.commit()
     conn.close()
     return get_active_requisites(safe_geo)
+
+
+def delete_geo_requisites_history_item(geo_code: str, history_id: int) -> dict[str, Any]:
+    safe_geo = sanitize_geo_code(geo_code) or "ES"
+    conn = get_connection()
+    existing = conn.execute(
+        """
+        SELECT id
+        FROM geo_requisites
+        WHERE id = ? AND geo_code = ?
+        LIMIT 1
+        """,
+        (history_id, safe_geo),
+    ).fetchone()
+    if existing is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Реквизиты с таким ID для выбранного GEO не найдены")
+
+    total_row = conn.execute(
+        "SELECT COUNT(*) AS value FROM geo_requisites WHERE geo_code = ?",
+        (safe_geo,),
+    ).fetchone()
+    total_count = int(total_row["value"]) if total_row else 0
+    if total_count <= 1:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Нельзя удалить последний комплект реквизитов для GEO")
+
+    conn.execute("DELETE FROM geo_requisites WHERE id = ? AND geo_code = ?", (history_id, safe_geo))
+    conn.commit()
+    conn.close()
+    return {
+        "deleted_id": history_id,
+        "active_requisites": get_active_requisites(safe_geo),
+        "history": list_geo_requisites_history_for_geo(safe_geo),
+    }
 
 
 def parse_admin_ids_from_args(args: list[str]) -> list[int]:
@@ -1073,6 +1299,78 @@ def cleanup_sessions() -> None:
         ADMIN_SESSIONS.pop(token, None)
 
 
+def cleanup_login_attempts() -> None:
+    cutoff = utc_now() - timedelta(minutes=LOGIN_WINDOW_MINUTES)
+    expired_ips = []
+    for ip_address, attempts in LOGIN_ATTEMPTS.items():
+        fresh_attempts = [item for item in attempts if item >= cutoff]
+        if fresh_attempts:
+            LOGIN_ATTEMPTS[ip_address] = fresh_attempts
+        else:
+            expired_ips.append(ip_address)
+    for ip_address in expired_ips:
+        LOGIN_ATTEMPTS.pop(ip_address, None)
+
+
+def register_failed_login(ip_address: str) -> None:
+    cleanup_login_attempts()
+    LOGIN_ATTEMPTS.setdefault(ip_address, []).append(utc_now())
+
+
+def clear_failed_logins(ip_address: str) -> None:
+    LOGIN_ATTEMPTS.pop(ip_address, None)
+
+
+def ensure_login_not_rate_limited(ip_address: str) -> None:
+    cleanup_login_attempts()
+    attempts = LOGIN_ATTEMPTS.get(ip_address, [])
+    if len(attempts) >= MAX_LOGIN_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Слишком много попыток входа. Попробуйте позже.")
+
+
+def url_origin(raw_url: str | None) -> str:
+    if not raw_url:
+        return ""
+    parsed = urlparse(raw_url)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}".lower()
+
+
+def allowed_admin_origins() -> set[str]:
+    return {
+        origin
+        for origin in {
+            url_origin(WEB_URL),
+            url_origin(ADMIN_PANEL_URL),
+            "http://127.0.0.1:8000",
+            "http://localhost:8000",
+        }
+        if origin
+    }
+
+
+def get_request_origin(request: Request) -> str:
+    return url_origin(request.headers.get("origin") or request.headers.get("referer") or "")
+
+
+def ensure_admin_request_origin(request: Request) -> None:
+    request_origin = get_request_origin(request)
+    current_origin = url_origin(str(request.base_url).rstrip("/"))
+    allowed = allowed_admin_origins()
+    if current_origin:
+        allowed.add(current_origin)
+    if not request_origin or request_origin not in allowed:
+        raise HTTPException(status_code=403, detail="Forbidden origin")
+
+
+def use_secure_cookie(request: Request) -> bool:
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    if forwarded_proto == "https":
+        return True
+    return request.url.scheme == "https"
+
+
 def create_admin_session() -> str:
     cleanup_sessions()
     token = secrets.token_urlsafe(32)
@@ -1183,7 +1481,10 @@ bot_app = Application.builder().token(BOT_TOKEN).build() if BOT_ENABLED else Non
 def get_bot_status() -> dict[str, Any]:
     runtime_running = False
     updater_running = False
-    admins_total = len(list_bot_admins())
+    users = list_bot_admins()
+    admins_total = sum(1 for item in users if item.get("role") == "admin")
+    processors_total = sum(1 for item in users if item.get("role") == "processor")
+    handlers_total = sum(1 for item in users if item.get("role") == "handler")
 
     if bot_app is not None:
         runtime_running = bool(getattr(bot_app, "running", False))
@@ -1194,6 +1495,9 @@ def get_bot_status() -> dict[str, Any]:
         "enabled": BOT_ENABLED,
         "admin_id_configured": admins_total > 0,
         "admin_count": admins_total,
+        "user_count": len(users),
+        "processor_count": processors_total,
+        "handler_count": handlers_total,
         "runtime_started": BOT_RUNTIME_STARTED,
         "app_running": runtime_running,
         "updater_running": updater_running,
@@ -1214,14 +1518,20 @@ def get_selected_geo(context: ContextTypes.DEFAULT_TYPE, user_id: int | None = N
     return selected_geo or "ES"
 
 
-def main_keyboard() -> ReplyKeyboardMarkup:
+def main_keyboard(role: str | None) -> ReplyKeyboardMarkup:
+    safe_role = sanitize_bot_role(role, "handler")
+    rows: list[list[str]] = [["🗺 Выбрать GEO", "📊 GEO статус"]]
+    if bot_role_has_permission(safe_role, "edit_requisites"):
+        rows.append(["📝 Реквизиты", "🗂 История реквизитов"])
+        rows.append(["🗑 Удалить реквизит"])
+    if bot_role_has_permission(safe_role, "manage_access"):
+        rows.append(["👤 Менеджер", "👥 Права доступа"])
+    if bot_role_has_permission(safe_role, "create_link"):
+        rows.append(["🔗 Ссылка на оплату"])
+    if bot_role_has_permission(safe_role, "open_admin_panel"):
+        rows.append(["🛠 Админка"])
     return ReplyKeyboardMarkup(
-        [
-            ["🗺 Выбрать GEO", "📊 GEO статус"],
-            ["📝 Реквизиты", "🗂 История реквизитов"],
-            ["👤 Менеджер", "👥 Админы"],
-            ["🔗 Ссылка на оплату", "🛠 Админка"],
-        ],
+        rows,
         resize_keyboard=True,
     )
 
@@ -1241,7 +1551,8 @@ def build_geo_details_text(geo_code: str) -> str:
         f"Менеджер: {profile['manager_name']}\n"
         f"Telegram: {manager_link}\n\n"
         f"Банк: {requisites['bank_name']}\n"
-        f"Карта / счет: {requisites['card_number']}\n"
+        f"IBAN: {requisites['card_number']}\n"
+        f"BIC / SWIFT: {requisites['bic_swift'] or 'не указан'}\n"
         f"Получатель: {requisites['receiver_name']}"
     )
 
@@ -1255,18 +1566,19 @@ def build_geo_overview_text() -> str:
         blocks.append(
             f"\n{profile['geo_code']} | {profile['geo_name']} | {profile['default_language']} | "
             f"таймер {profile['refresh_minutes']} мин | менеджер: {manager_status}\n"
-            f"{requisites['bank_name']} | {requisites['card_number']} | {requisites['receiver_name']}"
+            f"{requisites['bank_name']} | {requisites['card_number']} | {requisites['bic_swift'] or 'BIC/SWIFT не указан'} | {requisites['receiver_name']}"
         )
     return "\n".join(blocks)
 
 
 def build_admins_text() -> str:
     admins = list_bot_admins()
-    lines = ["Администраторы бота:"]
+    lines = ["Пользователи бота:"]
     for item in admins:
         display_name = item["full_name"] or item["username"] or "Без имени"
         username = f"@{item['username']}" if item["username"] else "username не задан"
-        lines.append(f"\nID: {item['user_id']} | {display_name} | {username}")
+        role_label = get_bot_role_label(item.get("role"))
+        lines.append(f"\nID: {item['user_id']} | {display_name} | {username} | роль: {role_label}")
     lines.append(
         "\nДобавить: /addadmin 123456789\n"
         "Удалить: /removeadmin 123456789\n"
@@ -1290,23 +1602,30 @@ def build_requisites_history_text(geo_code: str) -> str:
     ]
     for item in items:
         lines.append(
-            f"ID {item['id']} | {item['bank_name']} | {item['card_number']} | "
+            f"ID {item['id']} | {item['bank_name']} | {item['card_number']} | {item['bic_swift'] or 'без BIC/SWIFT'} | "
             f"{item['receiver_name']} | {item['created_at']}"
         )
     return "\n".join(lines)
 
 
-async def admin_check(update: Update) -> bool:
+async def admin_check(update: Update, permission: str | None = None) -> bool:
     message = update.effective_message
     if message is None:
         return False
     if not list_bot_admins():
-        await message.reply_text("Администраторы бота еще не настроены. Добавьте ADMIN_ID или ADMIN_IDS в окружение.")
+        await message.reply_text("Пользователи бота еще не настроены. Добавьте ADMIN_ID или ADMIN_IDS в окружение.")
         return False
-    if update.effective_user is None or not is_bot_admin(update.effective_user.id):
-        await message.reply_text("Нет доступа. Вы не администратор.")
+    user = update.effective_user
+    if user is None or not has_bot_access(user.id):
+        await message.reply_text("Нет доступа. Ваш Telegram ID не добавлен в систему.")
         return False
-    upsert_bot_admin_identity(update.effective_user)
+    role = get_bot_user_role(user.id)
+    if permission and not bot_role_has_permission(role, permission):
+        await message.reply_text(
+            f"Недостаточно прав. Ваша роль: {get_bot_role_label(role)}."
+        )
+        return False
+    upsert_bot_admin_identity(user)
     return True
 
 
@@ -1315,50 +1634,64 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
+    role = get_bot_user_role(user_id)
     await update.effective_message.reply_text(
         "Внутренняя панель команды активна.\n\n"
+        f"Ваша роль: {get_bot_role_label(role)}\n"
         f"Текущий выбранный GEO: {selected_geo}\n\n"
         f"{build_geo_details_text(selected_geo)}",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(role),
     )
 
 
 async def show_geo_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_check(update):
+    if not await admin_check(update, "view_geo"):
         return
-    await update.effective_message.reply_text(build_geo_overview_text(), reply_markup=main_keyboard())
+    user_id = update.effective_user.id if update.effective_user else None
+    await update.effective_message.reply_text(
+        build_geo_overview_text(),
+        reply_markup=main_keyboard(get_bot_user_role(user_id)),
+    )
 
 
 async def show_admins_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_check(update):
+    if not await admin_check(update, "manage_access"):
         return
-    await update.effective_message.reply_text(build_admins_text(), reply_markup=main_keyboard())
+    user_id = update.effective_user.id if update.effective_user else None
+    await update.effective_message.reply_text(
+        build_admins_text(),
+        reply_markup=main_keyboard(get_bot_user_role(user_id)),
+    )
 
 
 async def show_admin_panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_check(update):
+    if not await admin_check(update, "open_admin_panel"):
         return
+    user_id = update.effective_user.id if update.effective_user else None
     await update.effective_message.reply_text(
         "Быстрый вход в веб-админку:\n"
         f"{build_admin_panel_link()}",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(get_bot_user_role(user_id)),
     )
 
 
 async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_check(update):
+    if not await admin_check(update, "manage_access"):
         return
     if not context.args:
         await update.effective_message.reply_text(
             "Укажите один или несколько Telegram ID.\n"
             "Пример: /addadmin 123456789 987654321\n"
             "Также можно: /addadmin 123456789,987654321",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
         )
         return
     target_ids = parse_admin_ids_from_args(context.args)
     if not target_ids:
-        await update.effective_message.reply_text("Нужен корректный числовой Telegram ID.", reply_markup=main_keyboard())
+        await update.effective_message.reply_text(
+            "Нужен корректный числовой Telegram ID.",
+            reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
+        )
         return
     added_ids: list[int] = []
     skipped_ids: list[int] = []
@@ -1377,24 +1710,27 @@ async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         summary_lines.append("Никого не удалось добавить.")
     await update.effective_message.reply_text(
         f"{chr(10).join(summary_lines)}\n\n{build_admins_text()}",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
     )
 
 
 async def remove_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_check(update):
+    if not await admin_check(update, "manage_access"):
         return
     if not context.args:
         await update.effective_message.reply_text(
             "Укажите один или несколько Telegram ID.\n"
             "Пример: /removeadmin 123456789 987654321\n"
             "Также можно: /removeadmin 123456789,987654321",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
         )
         return
     target_ids = parse_admin_ids_from_args(context.args)
     if not target_ids:
-        await update.effective_message.reply_text("Нужен корректный числовой Telegram ID.", reply_markup=main_keyboard())
+        await update.effective_message.reply_text(
+            "Нужен корректный числовой Telegram ID.",
+            reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
+        )
         return
     removed_ids: list[int] = []
     failed_messages: list[str] = []
@@ -1413,12 +1749,12 @@ async def remove_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         summary_lines.append("Никого не удалось удалить.")
     await update.effective_message.reply_text(
         f"{chr(10).join(summary_lines)}\n\n{build_admins_text()}",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
     )
 
 
 async def select_geo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await admin_check(update):
+    if not await admin_check(update, "select_geo"):
         return ConversationHandler.END
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
@@ -1439,13 +1775,13 @@ async def select_geo_save(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     set_bot_admin_selected_geo(update.effective_user.id if update.effective_user else None, geo_code)
     await update.effective_message.reply_text(
         f"GEO переключен на {geo_code}.\n\n{build_geo_details_text(geo_code)}",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
     )
     return ConversationHandler.END
 
 
 async def change_reqs_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await admin_check(update):
+    if not await admin_check(update, "edit_requisites"):
         return ConversationHandler.END
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
@@ -1453,11 +1789,13 @@ async def change_reqs_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await update.effective_message.reply_text(
         f"Текущий GEO: {selected_geo}\n"
         f"Банк: {requisites['bank_name']}\n"
-        f"Карта / счет: {requisites['card_number']}\n"
+        f"IBAN: {requisites['card_number']}\n"
+        f"BIC / SWIFT: {requisites['bic_swift'] or 'не указан'}\n"
         f"Получатель: {requisites['receiver_name']}\n\n"
-        "Отправьте новые реквизиты тремя строками:\n"
+        "Отправьте новые реквизиты четырьмя строками:\n"
         "Банк\n"
-        "Карта или счет\n"
+        "IBAN\n"
+        "BIC / SWIFT (можно оставить пустым, поставив -)\n"
         "Получатель"
     )
     return WAITING_REQUISITES
@@ -1465,29 +1803,29 @@ async def change_reqs_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def change_reqs_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     lines = [line.strip() for line in update.effective_message.text.strip().splitlines() if line.strip()]
-    if len(lines) < 3:
-        await update.effective_message.reply_text("Нужно 3 строки: банк, карта/счет и получатель.")
+    if len(lines) < 4:
+        await update.effective_message.reply_text("Нужно 4 строки: банк, IBAN, BIC / SWIFT и получатель.")
         return WAITING_REQUISITES
 
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
-    update_geo_requisites(selected_geo, lines[0], lines[1], lines[2])
+    update_geo_requisites(selected_geo, lines[0], lines[1], "" if lines[2] == "-" else lines[2], lines[3])
     await update.effective_message.reply_text(
         f"Реквизиты для {selected_geo} обновлены.\n\n{build_geo_details_text(selected_geo)}",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(get_bot_user_role(user_id)),
     )
     return ConversationHandler.END
 
 
 async def show_requisites_history_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await admin_check(update):
+    if not await admin_check(update, "view_requisites_history"):
         return ConversationHandler.END
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
     await update.effective_message.reply_text(
         f"{build_requisites_history_text(selected_geo)}\n\n"
         "Для отмены отправьте /cancel",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(get_bot_user_role(user_id)),
     )
     return WAITING_REQUISITES_HISTORY
 
@@ -1509,13 +1847,49 @@ async def show_requisites_history_save(update: Update, context: ContextTypes.DEF
     await update.effective_message.reply_text(
         f"Реквизиты из истории ID {history_id} снова активны для {selected_geo}.\n\n"
         f"{build_geo_details_text(selected_geo)}",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(get_bot_user_role(user_id)),
+    )
+    return ConversationHandler.END
+
+
+async def delete_requisites_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await admin_check(update, "delete_requisites"):
+        return ConversationHandler.END
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
+    await update.effective_message.reply_text(
+        f"{build_requisites_history_text(selected_geo)}\n\n"
+        "Отправьте ID записи, которую нужно удалить.\n"
+        "Последний комплект реквизитов удалить нельзя.\n"
+        "Для отмены отправьте /cancel",
+        reply_markup=main_keyboard(get_bot_user_role(user_id)),
+    )
+    return WAITING_REQUISITES_DELETE
+
+
+async def delete_requisites_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    history_id = parse_optional_int(update.effective_message.text)
+    if history_id is None or history_id <= 0:
+        await update.effective_message.reply_text("Нужен числовой ID записи из истории.")
+        return WAITING_REQUISITES_DELETE
+
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
+    try:
+        delete_geo_requisites_history_item(selected_geo, history_id)
+    except HTTPException as exc:
+        await update.effective_message.reply_text(str(exc.detail))
+        return WAITING_REQUISITES_DELETE
+
+    await update.effective_message.reply_text(
+        f"Реквизиты ID {history_id} удалены для {selected_geo}.\n\n{build_geo_details_text(selected_geo)}",
+        reply_markup=main_keyboard(get_bot_user_role(user_id)),
     )
     return ConversationHandler.END
 
 
 async def change_manager_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await admin_check(update):
+    if not await admin_check(update, "edit_manager"):
         return ConversationHandler.END
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
@@ -1544,13 +1918,13 @@ async def change_manager_save(update: Update, context: ContextTypes.DEFAULT_TYPE
     update_geo_manager(selected_geo, lines[0], manager_link)
     await update.effective_message.reply_text(
         f"Менеджер для {selected_geo} обновлен.\n\n{build_geo_details_text(selected_geo)}",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(get_bot_user_role(user_id)),
     )
     return ConversationHandler.END
 
 
 async def create_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await admin_check(update):
+    if not await admin_check(update, "create_link"):
         return ConversationHandler.END
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
@@ -1596,7 +1970,14 @@ async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE
     clean_label = str(context.user_data.get("temp_label", ""))
     comment = update.effective_message.text.strip()
     clean_comment = "" if comment == "-" else clean_payment_comment(comment)
-    link = build_payment_link(amount, selected_geo, clean_label, clean_comment)
+    try:
+        link = build_payment_link(amount, selected_geo, clean_label, clean_comment)
+    except HTTPException as exc:
+        await update.effective_message.reply_text(
+            str(exc.detail),
+            reply_markup=main_keyboard(get_bot_user_role(user_id)),
+        )
+        return ConversationHandler.END
     context.user_data.pop("temp_amount", None)
     context.user_data.pop("temp_label", None)
     await update.effective_message.reply_text(
@@ -1605,14 +1986,19 @@ async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"Сумма: {amount:.2f} {DEFAULT_CURRENCY}\n"
         f"Назначение: {clean_label or 'не указано'}\n"
         f"Комментарий: {clean_comment or 'не указан'}\n"
+        "Язык: авто по устройству / IP\n"
         f"Ссылка: {link}",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(get_bot_user_role(user_id)),
     )
     return ConversationHandler.END
 
 
 async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.effective_message.reply_text("Действие отменено.", reply_markup=main_keyboard())
+    user_id = update.effective_user.id if update.effective_user else None
+    await update.effective_message.reply_text(
+        "Действие отменено.",
+        reply_markup=main_keyboard(get_bot_user_role(user_id)),
+    )
     return ConversationHandler.END
 
 
@@ -1639,6 +2025,11 @@ if bot_app is not None:
         },
         fallbacks=[CommandHandler("cancel", cancel_cmd)],
     )
+    conv_handler_req_delete = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^🗑 Удалить реквизит$"), delete_requisites_start)],
+        states={WAITING_REQUISITES_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_requisites_save)]},
+        fallbacks=[CommandHandler("cancel", cancel_cmd)],
+    )
     conv_handler_manager = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^👤 Менеджер$"), change_manager_start)],
         states={WAITING_MANAGER: [MessageHandler(filters.TEXT & ~filters.COMMAND, change_manager_save)]},
@@ -1660,11 +2051,12 @@ if bot_app is not None:
     bot_app.add_handler(CommandHandler("removeadmin", remove_admin_cmd))
     bot_app.add_handler(CommandHandler("adminpanel", show_admin_panel_cmd))
     bot_app.add_handler(MessageHandler(filters.Regex("^📊 GEO статус$"), show_geo_status_cmd))
-    bot_app.add_handler(MessageHandler(filters.Regex("^👥 Админы$"), show_admins_cmd))
+    bot_app.add_handler(MessageHandler(filters.Regex("^👥 Права доступа$"), show_admins_cmd))
     bot_app.add_handler(MessageHandler(filters.Regex("^🛠 Админка$"), show_admin_panel_cmd))
     bot_app.add_handler(conv_handler_geo)
     bot_app.add_handler(conv_handler_req)
     bot_app.add_handler(conv_handler_req_history)
+    bot_app.add_handler(conv_handler_req_delete)
     bot_app.add_handler(conv_handler_manager)
     bot_app.add_handler(conv_handler_link)
 
@@ -1705,11 +2097,10 @@ app.add_middleware(
         "http://127.0.0.1:8000",
         "http://localhost:8000",
         WEB_URL,
-        "null",
     ],
     allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -1738,6 +2129,8 @@ async def landing_context(
     request: Request,
     payment: str | None = None,
     geo: str | None = None,
+    req: int | None = None,
+    lang: str | None = None,
     label: str | None = None,
     comment: str | None = None,
 ):
@@ -1747,9 +2140,18 @@ async def landing_context(
     payment_amount = parse_payment_amount(payment)
     payment_label = (label or "").strip()
     mode = "live" if payment_amount is not None else ("preview" if ALLOW_PREVIEW_MODE else "invalid")
-    requisites = get_active_requisites(resolved_geo) if mode != "invalid" else None
+    invalid_reason = ""
+    if mode != "invalid" and not normalize_manager_link(profile.get("manager_telegram_url")):
+        mode = "invalid"
+        invalid_reason = "manager_missing"
+    requisites = resolve_requisites_for_geo(resolved_geo, req) if mode != "invalid" else None
     refresh_seconds = max(60, int(profile["refresh_minutes"]) * 60) if mode != "invalid" else 0
-    recommended_language = sanitize_language_code(profile["default_language"]) or "en"
+    recommended_language = resolve_recommended_language(
+        explicit_language=lang,
+        browser_language=browser_language,
+        country_code=visitor.get("country_code"),
+        geo_default_language=profile.get("default_language"),
+    )
     payment_comment = clean_payment_comment(comment)
 
     visit_token = record_visit(
@@ -1766,6 +2168,7 @@ async def landing_context(
 
     return {
         "mode": mode,
+        "invalid_reason": invalid_reason,
         "recommended_language": recommended_language,
         "available_languages": LANGUAGE_OPTIONS,
         "payment": {
@@ -1806,30 +2209,48 @@ async def landing_client(payload: LandingClientPayload):
 async def admin_session(request: Request):
     cleanup_sessions()
     token = request.cookies.get(SESSION_COOKIE_NAME)
-    return {"authenticated": bool(token and token in ADMIN_SESSIONS)}
+    return {
+        "authenticated": bool(token and token in ADMIN_SESSIONS),
+        "configured": ADMIN_AUTH_CONFIGURED,
+    }
 
 
 @app.post("/api/admin/login")
-async def admin_login(payload: AdminLoginPayload):
-    if payload.username != ADMIN_USERNAME or payload.password != ADMIN_PASSWORD:
+async def admin_login(payload: AdminLoginPayload, request: Request):
+    ensure_admin_request_origin(request)
+    if not ADMIN_AUTH_CONFIGURED:
+        raise HTTPException(
+            status_code=503,
+            detail="Вход отключен: задайте ADMIN_USERNAME и ADMIN_PASSWORD в переменных окружения.",
+        )
+    client_ip = extract_client_ip(request)
+    ensure_login_not_rate_limited(client_ip)
+    if not (
+        secrets.compare_digest(payload.username, ADMIN_USERNAME)
+        and secrets.compare_digest(payload.password, ADMIN_PASSWORD)
+    ):
+        register_failed_login(client_ip)
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
     response = JSONResponse({"authenticated": True})
     session_token = create_admin_session()
+    clear_failed_logins(client_ip)
     response.set_cookie(
         SESSION_COOKIE_NAME,
         session_token,
         httponly=True,
-        samesite="lax",
+        secure=use_secure_cookie(request),
+        samesite="strict",
         max_age=SESSION_TTL_HOURS * 3600,
     )
     return response
 
 
 @app.post("/api/admin/logout")
-async def admin_logout():
+async def admin_logout(request: Request):
+    ensure_admin_request_origin(request)
     response = JSONResponse({"ok": True})
-    response.delete_cookie(SESSION_COOKIE_NAME)
+    response.delete_cookie(SESSION_COOKIE_NAME, samesite="strict")
     return response
 
 
@@ -1840,6 +2261,8 @@ async def admin_dashboard(request: Request):
         "generated_at": utc_now_iso(),
         "web_url": WEB_URL,
         "bot": get_bot_status(),
+        "bot_users": list_bot_admins(),
+        "bot_roles": BOT_ROLE_OPTIONS,
         "stats": get_summary_stats(),
         "geos": list_geo_snapshots(),
         "requisites_history": list_geo_requisites_history(),
@@ -1850,9 +2273,46 @@ async def admin_dashboard(request: Request):
 
 @app.post("/api/admin/geos/{geo_code}")
 async def admin_update_geo(geo_code: str, payload: GeoConfigPayload, request: Request):
+    ensure_admin_request_origin(request)
     ensure_admin_session(request)
     snapshot = save_geo_configuration(geo_code, payload)
     return {"ok": True, "geo": snapshot}
+
+
+@app.post("/api/admin/bot-users")
+async def admin_save_bot_user(payload: BotUserPayload, request: Request):
+    ensure_admin_request_origin(request)
+    ensure_admin_session(request)
+    if payload.user_id <= 0:
+        raise HTTPException(status_code=400, detail="Нужен корректный Telegram ID")
+    bot_user = save_bot_user_role(0, payload.user_id, payload.role)
+    return {"ok": True, "bot_user": bot_user}
+
+
+@app.delete("/api/admin/bot-users/{user_id}")
+async def admin_delete_bot_user(user_id: int, request: Request):
+    ensure_admin_request_origin(request)
+    ensure_admin_session(request)
+    success, message = remove_bot_admin(user_id)
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    return {"ok": True, "message": message}
+
+
+@app.post("/api/admin/requisites/{geo_code}/history/{history_id}/activate")
+async def admin_activate_requisites_history(geo_code: str, history_id: int, request: Request):
+    ensure_admin_request_origin(request)
+    ensure_admin_session(request)
+    active_requisites = restore_geo_requisites_from_history(geo_code, history_id)
+    return {"ok": True, "active_requisites": active_requisites}
+
+
+@app.delete("/api/admin/requisites/{geo_code}/history/{history_id}")
+async def admin_delete_requisites_history(geo_code: str, history_id: int, request: Request):
+    ensure_admin_request_origin(request)
+    ensure_admin_session(request)
+    result = delete_geo_requisites_history_item(geo_code, history_id)
+    return {"ok": True, **result}
 
 
 STATIC_DIR.mkdir(exist_ok=True)
