@@ -87,6 +87,10 @@ WAITING_LINK_MANAGER = 6
 WAITING_LINK_LANGUAGE = 7
 WAITING_LINK_LABEL = 8
 WAITING_LINK_COMMENT = 9
+MENU_BUTTONS_PATTERN = (
+    r"^(🗺 Выбрать GEO|📊 GEO статус|📊 Активные реквизиты|📝 Реквизиты|🗂 История реквизитов|"
+    r"🗑 Удалить реквизит|👤 Менеджер|👥 Права доступа|🔗 Ссылка на оплату|🛠 Админка|ℹ️ Помощь)$"
+)
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
@@ -360,9 +364,11 @@ def build_payment_link(
     forced_language: str | None = None,
     requisites_id: int | None = None,
     manager_id: int | None = None,
+    manager_link_override: str | None = None,
 ) -> str:
     safe_geo = sanitize_geo_code(geo_code) or "ES"
-    if not has_manager_contact(safe_geo, manager_id):
+    safe_manager_link = normalize_manager_link(manager_link_override)
+    if not safe_manager_link and not has_manager_contact(safe_geo, manager_id):
         raise HTTPException(status_code=400, detail=f"Для GEO {safe_geo} не задан контакт менеджера")
     params = {
         "payment": format_query_amount(amount),
@@ -381,6 +387,8 @@ def build_payment_link(
         params["req"] = str(requisites_id)
     if manager_id is not None and manager_id > 0:
         params["mgr"] = str(manager_id)
+    if safe_manager_link:
+        params["mgr_link"] = safe_manager_link
     return f"{WEB_URL}/?{urlencode(params)}"
 
 
@@ -2046,6 +2054,7 @@ def build_link_manager_selection_text(geo_code: str) -> str:
         f"Текущий GEO: {geo_code}",
         "Выберите менеджера для ссылки.",
         "Отправьте `default` или `-`, чтобы взять менеджера GEO по умолчанию.",
+        "Или отправьте Telegram-ссылку / @username, чтобы подставить свой контакт в эту ссылку.",
     ]
     if default_manager and default_manager.get("id"):
         lines.append(
@@ -2520,6 +2529,7 @@ async def create_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data.pop("temp_amount", None)
     context.user_data.pop("temp_requisites_id", None)
     context.user_data.pop("temp_manager_id", None)
+    context.user_data.pop("temp_manager_link", None)
     context.user_data.pop("temp_language", None)
     context.user_data.pop("temp_label", None)
     await update.effective_message.reply_text(
@@ -2558,17 +2568,26 @@ async def create_link_requisites(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def create_link_manager(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    raw_value = update.effective_message.text.strip().lower()
+    raw_text = update.effective_message.text.strip()
+    raw_value = raw_text.lower()
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
     manager_id: int | None = None
+    manager_link = ""
     if raw_value not in {"-", "default"}:
-        manager_id = parse_optional_int(raw_value)
-        if manager_id is None or get_geo_manager_by_id(selected_geo, manager_id) is None:
-            await update.effective_message.reply_text("Нужен `default` или корректный ID менеджера.")
-            return WAITING_LINK_MANAGER
+        parsed_manager_id = parse_optional_int(raw_value)
+        if parsed_manager_id is not None and get_geo_manager_by_id(selected_geo, parsed_manager_id) is not None:
+            manager_id = parsed_manager_id
+        else:
+            manager_link = normalize_manager_link(raw_text)
+            if not manager_link:
+                await update.effective_message.reply_text(
+                    "Нужен `default`, корректный ID менеджера или Telegram-ссылка вида @username / https://t.me/username."
+                )
+                return WAITING_LINK_MANAGER
 
     context.user_data["temp_manager_id"] = manager_id
+    context.user_data["temp_manager_link"] = manager_link
     await update.effective_message.reply_text(build_link_language_selection_text())
     return WAITING_LINK_LANGUAGE
 
@@ -2612,6 +2631,7 @@ async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE
     selected_geo = get_selected_geo(context, user_id)
     requisites_id = context.user_data.get("temp_requisites_id")
     manager_id = context.user_data.get("temp_manager_id")
+    manager_link = normalize_manager_link(context.user_data.get("temp_manager_link"))
     forced_language = context.user_data.get("temp_language")
     clean_label = str(context.user_data.get("temp_label", ""))
     comment = update.effective_message.text.strip()
@@ -2625,6 +2645,7 @@ async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE
             forced_language=forced_language,
             requisites_id=requisites_id,
             manager_id=manager_id,
+            manager_link_override=manager_link,
         )
     except HTTPException as exc:
         await update.effective_message.reply_text(
@@ -2633,9 +2654,16 @@ async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return ConversationHandler.END
     manager = resolve_manager_for_geo(selected_geo, manager_id)
+    if manager_link:
+        manager = {
+            **manager,
+            "manager_name": manager.get("manager_name") or "персональный контакт",
+            "manager_telegram_url": manager_link,
+        }
     context.user_data.pop("temp_amount", None)
     context.user_data.pop("temp_requisites_id", None)
     context.user_data.pop("temp_manager_id", None)
+    context.user_data.pop("temp_manager_link", None)
     context.user_data.pop("temp_language", None)
     context.user_data.pop("temp_label", None)
     log_bot_activity(user_id, "create_link", geo_code=selected_geo, payload=f"{amount:.2f}")
@@ -2664,32 +2692,45 @@ async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 if bot_app is not None:
+    conversation_text_filter = filters.TEXT & ~filters.COMMAND & ~filters.Regex(MENU_BUTTONS_PATTERN)
     conv_handler_geo = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🗺 Выбрать GEO$"), select_geo_start)],
-        states={WAITING_GEO_SELECTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_geo_save)]},
-        fallbacks=[CommandHandler("cancel", cancel_cmd)],
+        states={WAITING_GEO_SELECTION: [MessageHandler(conversation_text_filter, select_geo_save)]},
+        fallbacks=[
+            CommandHandler("cancel", cancel_cmd),
+            MessageHandler(filters.Regex(MENU_BUTTONS_PATTERN), cancel_cmd),
+        ],
     )
     conv_handler_req = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^📝 Реквизиты$"), change_reqs_start)],
-        states={WAITING_REQUISITES: [MessageHandler(filters.TEXT & ~filters.COMMAND, change_reqs_save)]},
-        fallbacks=[CommandHandler("cancel", cancel_cmd)],
+        states={WAITING_REQUISITES: [MessageHandler(conversation_text_filter, change_reqs_save)]},
+        fallbacks=[
+            CommandHandler("cancel", cancel_cmd),
+            MessageHandler(filters.Regex(MENU_BUTTONS_PATTERN), cancel_cmd),
+        ],
     )
     conv_handler_manager = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^👤 Менеджер$"), change_manager_start)],
-        states={WAITING_MANAGER: [MessageHandler(filters.TEXT & ~filters.COMMAND, change_manager_save)]},
-        fallbacks=[CommandHandler("cancel", cancel_cmd)],
+        states={WAITING_MANAGER: [MessageHandler(conversation_text_filter, change_manager_save)]},
+        fallbacks=[
+            CommandHandler("cancel", cancel_cmd),
+            MessageHandler(filters.Regex(MENU_BUTTONS_PATTERN), cancel_cmd),
+        ],
     )
     conv_handler_link = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🔗 Ссылка на оплату$"), create_link_start)],
         states={
-            WAITING_LINK_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_link_amount)],
-            WAITING_LINK_REQUISITES: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_link_requisites)],
-            WAITING_LINK_MANAGER: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_link_manager)],
-            WAITING_LINK_LANGUAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_link_language)],
-            WAITING_LINK_LABEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_link_label)],
-            WAITING_LINK_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_link_comment)],
+            WAITING_LINK_AMOUNT: [MessageHandler(conversation_text_filter, create_link_amount)],
+            WAITING_LINK_REQUISITES: [MessageHandler(conversation_text_filter, create_link_requisites)],
+            WAITING_LINK_MANAGER: [MessageHandler(conversation_text_filter, create_link_manager)],
+            WAITING_LINK_LANGUAGE: [MessageHandler(conversation_text_filter, create_link_language)],
+            WAITING_LINK_LABEL: [MessageHandler(conversation_text_filter, create_link_label)],
+            WAITING_LINK_COMMENT: [MessageHandler(conversation_text_filter, create_link_comment)],
         },
-        fallbacks=[CommandHandler("cancel", cancel_cmd)],
+        fallbacks=[
+            CommandHandler("cancel", cancel_cmd),
+            MessageHandler(filters.Regex(MENU_BUTTONS_PATTERN), cancel_cmd),
+        ],
     )
 
     bot_app.add_handler(CommandHandler("start", start_cmd))
@@ -2783,6 +2824,7 @@ async def landing_context(
     geo: str | None = None,
     req: int | None = None,
     mgr: int | None = None,
+    mgr_link: str | None = None,
     lang: str | None = None,
     label: str | None = None,
     comment: str | None = None,
@@ -2791,6 +2833,13 @@ async def landing_context(
     resolved_geo = resolve_geo_code(geo, visitor.get("country_code"), browser_language)
     profile = get_geo_profile(resolved_geo)
     manager = resolve_manager_for_geo(resolved_geo, mgr)
+    forced_manager_link = normalize_manager_link(mgr_link)
+    if forced_manager_link:
+        manager = {
+            **manager,
+            "manager_name": manager.get("manager_name") or "personal manager",
+            "manager_telegram_url": forced_manager_link,
+        }
     payment_amount = parse_payment_amount(payment)
     payment_label = (label or "").strip()
     mode = "live" if payment_amount is not None else ("preview" if ALLOW_PREVIEW_MODE else "invalid")
