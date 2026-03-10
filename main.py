@@ -1,12 +1,8 @@
 import ipaddress
-import json
-import logging
 import os
 import re
 import secrets
 import sqlite3
-import time
-import unicodedata
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -50,36 +46,6 @@ def resolve_db_file() -> Path:
 
 DB_FILE = resolve_db_file()
 DB_FILE.parent.mkdir(parents=True, exist_ok=True)
-APP_BUILD_TAG = os.getenv("APP_BUILD_TAG", "paymentplatform-2026-03-10-log-v1").strip() or "paymentplatform-2026-03-10-log-v1"
-APP_INSTANCE_ID = secrets.token_hex(4)
-LOG_LEVEL_NAME = os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO"
-LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.INFO)
-logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-logger = logging.getLogger("paymentplatform")
-
-
-def _serialize_log_value(value: Any) -> Any:
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, dict):
-        return {str(key): _serialize_log_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [_serialize_log_value(item) for item in value]
-    return str(value)
-
-
-def runtime_log(event: str, level: int = logging.INFO, **fields: Any) -> None:
-    payload = {
-        "event": event,
-        "build_tag": APP_BUILD_TAG,
-        "instance_id": APP_INSTANCE_ID,
-        **{key: _serialize_log_value(value) for key, value in fields.items()},
-    }
-    logger.log(level, json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
 def parse_optional_int(raw_value: str, default: int | None = None) -> int | None:
@@ -388,60 +354,8 @@ def clean_payment_comment(raw_value: str | None) -> str:
     return value[:300]
 
 
-def normalize_button_text(value: str | None) -> str:
-    text = unicodedata.normalize("NFKC", (value or ""))
-    text = text.replace("\ufe0f", "")
-    text = re.sub(r"\s+", " ", text).strip().lower()
-    return text
-
-
-def is_main_menu_text(value: str | None) -> bool:
-    text = normalize_button_text(value)
-    if not text:
-        return False
-    normalized_labels = {normalize_button_text(label) for label in MENU_BUTTON_LABELS}
-    if text in normalized_labels:
-        return True
-    # Fallback on keywords in case Telegram sends emoji-variant text.
-    menu_keywords = (
-        "выбрать geo",
-        "geo статус",
-        "активные реквизиты",
-        "реквизиты",
-        "история реквизитов",
-        "удалить реквизит",
-        "менеджер",
-        "права доступа",
-        "ссылка на оплату",
-        "админка",
-        "помощь",
-    )
-    return any(keyword in text for keyword in menu_keywords)
-
-
 def is_menu_button_text(text: str | None) -> bool:
-    return is_main_menu_text(text)
-
-
-async def handle_menu_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    message = update.effective_message
-    if message is None:
-        return False
-    if not is_main_menu_text(message.text):
-        return False
-    user_id = update.effective_user.id if update.effective_user else None
-    runtime_log(
-        "menu_interrupt",
-        user_id=user_id,
-        role=get_bot_user_role(user_id),
-        text=message.text,
-        selected_geo=get_selected_geo(context, user_id),
-    )
-    await message.reply_text(
-        "Текущий шаг отменен. Нажмите нужную кнопку еще раз.",
-        reply_markup=main_keyboard(get_bot_user_role(user_id)),
-    )
-    return True
+    return (text or "").strip() in MENU_BUTTON_LABELS
 
 
 def parse_payment_amount(raw_value: str | None) -> float | None:
@@ -496,20 +410,7 @@ def build_payment_link(
         params["mgr"] = str(manager_id)
     if safe_manager_link:
         params["mgr_link"] = safe_manager_link
-    link = f"{WEB_URL}/?{urlencode(params)}"
-    runtime_log(
-        "build_payment_link",
-        geo_code=safe_geo,
-        amount=amount,
-        requisites_id=requisites_id,
-        manager_id=manager_id,
-        manager_link_override=safe_manager_link,
-        label=clean_label,
-        comment=clean_comment,
-        language=safe_language,
-        link=link,
-    )
-    return link
+    return f"{WEB_URL}/?{urlencode(params)}"
 
 
 def build_admin_panel_link() -> str:
@@ -997,14 +898,6 @@ def save_geo_manager(payload: ManagerPayload) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Нужна Telegram-ссылка менеджера")
 
     manager_id = payload.manager_id if payload.manager_id and payload.manager_id > 0 else None
-    runtime_log(
-        "save_geo_manager_started",
-        geo_code=safe_geo,
-        incoming_manager_id=manager_id,
-        make_default=payload.make_default,
-        manager_name=clean_name,
-        manager_url=clean_url,
-    )
     conn = get_connection()
     if manager_id:
         existing = conn.execute(
@@ -1058,12 +951,6 @@ def save_geo_manager(payload: ManagerPayload) -> dict[str, Any]:
         )
     conn.commit()
     conn.close()
-    runtime_log(
-        "save_geo_manager_completed",
-        geo_code=safe_geo,
-        saved_manager_id=saved_manager_id,
-        make_default=payload.make_default,
-    )
     return resolve_manager_for_geo(safe_geo, saved_manager_id)
 
 
@@ -1227,14 +1114,6 @@ def update_geo_requisites(
     if not clean_bank or not clean_card or not clean_receiver:
         raise HTTPException(status_code=400, detail="Нужно указать банк, IBAN и получателя")
 
-    runtime_log(
-        "update_geo_requisites_started",
-        geo_code=safe_geo,
-        bank_name=clean_bank,
-        card_number=clean_card,
-        bic_swift=clean_bic_swift,
-        receiver_name=clean_receiver,
-    )
     conn = get_connection()
     conn.execute(
         """
@@ -1245,13 +1124,7 @@ def update_geo_requisites(
     )
     conn.commit()
     conn.close()
-    active_requisites = get_active_requisites(safe_geo)
-    runtime_log(
-        "update_geo_requisites_completed",
-        geo_code=safe_geo,
-        active_requisites_id=active_requisites.get("id"),
-    )
-    return active_requisites
+    return get_active_requisites(safe_geo)
 
 
 def update_geo_manager(geo_code: str, manager_name: str, manager_telegram_url: str) -> dict[str, Any]:
@@ -1376,15 +1249,6 @@ def log_bot_activity(
     target_user_id: int | None = None,
     payload: str = "",
 ) -> None:
-    runtime_log(
-        "bot_activity",
-        actor_user_id=actor_user_id,
-        actor_role=get_bot_user_role(actor_user_id),
-        action_type=action_type,
-        geo_code=sanitize_geo_code(geo_code),
-        target_user_id=target_user_id,
-        payload=payload[:200],
-    )
     conn = get_connection()
     conn.execute(
         """
@@ -1655,7 +1519,6 @@ def set_bot_admin_selected_geo(user_id: int | None, geo_code: str) -> None:
 
 def restore_geo_requisites_from_history(geo_code: str, history_id: int) -> dict[str, Any]:
     safe_geo = sanitize_geo_code(geo_code) or "ES"
-    runtime_log("restore_geo_requisites_started", geo_code=safe_geo, history_id=history_id)
     conn = get_connection()
     row = conn.execute(
         """
@@ -1679,19 +1542,11 @@ def restore_geo_requisites_from_history(geo_code: str, history_id: int) -> dict[
     )
     conn.commit()
     conn.close()
-    active_requisites = get_active_requisites(safe_geo)
-    runtime_log(
-        "restore_geo_requisites_completed",
-        geo_code=safe_geo,
-        history_id=history_id,
-        active_requisites_id=active_requisites.get("id"),
-    )
-    return active_requisites
+    return get_active_requisites(safe_geo)
 
 
 def delete_geo_requisites_history_item(geo_code: str, history_id: int) -> dict[str, Any]:
     safe_geo = sanitize_geo_code(geo_code) or "ES"
-    runtime_log("delete_geo_requisites_started", geo_code=safe_geo, history_id=history_id)
     conn = get_connection()
     existing = conn.execute(
         """
@@ -1718,7 +1573,6 @@ def delete_geo_requisites_history_item(geo_code: str, history_id: int) -> dict[s
     conn.execute("DELETE FROM geo_requisites WHERE id = ? AND geo_code = ?", (history_id, safe_geo))
     conn.commit()
     conn.close()
-    runtime_log("delete_geo_requisites_completed", geo_code=safe_geo, history_id=history_id)
     return {
         "deleted_id": history_id,
         "active_requisites": get_active_requisites(safe_geo),
@@ -2027,15 +1881,6 @@ async def build_visitor_context(request: Request) -> tuple[dict[str, Any], str |
 
 
 init_db()
-runtime_log(
-    "module_initialized",
-    db_path=DB_FILE,
-    db_exists=DB_FILE.exists(),
-    bot_enabled=BOT_ENABLED,
-    web_url=WEB_URL,
-    admin_panel_url=ADMIN_PANEL_URL,
-    initial_admin_ids=sorted(INITIAL_ADMIN_IDS),
-)
 
 # --- TELEGRAM BOT ---
 bot_app = Application.builder().token(BOT_TOKEN).build() if BOT_ENABLED else None
@@ -2483,9 +2328,6 @@ async def select_geo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def select_geo_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if await handle_menu_interrupt(update, context):
-        return ConversationHandler.END
-
     geo_code = sanitize_geo_code(update.effective_message.text)
     if not geo_code:
         await update.effective_message.reply_text("Поддерживаются только ES, IT, DE и FR.")
@@ -2507,12 +2349,6 @@ async def change_reqs_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
     requisites = get_active_requisites(selected_geo)
-    runtime_log(
-        "change_reqs_start",
-        user_id=user_id,
-        selected_geo=selected_geo,
-        active_requisites_id=requisites.get("id"),
-    )
     await update.effective_message.reply_text(
         f"Текущий GEO: {selected_geo}\n"
         f"Банк: {requisites['bank_name']}\n"
@@ -2529,7 +2365,12 @@ async def change_reqs_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def change_reqs_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if await handle_menu_interrupt(update, context):
+    incoming_text = update.effective_message.text
+    if is_menu_button_text(incoming_text):
+        await update.effective_message.reply_text(
+            "Текущий ввод реквизитов отменен. Нажмите нужную кнопку еще раз.",
+            reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
+        )
         return ConversationHandler.END
 
     lines = [line.strip() for line in update.effective_message.text.strip().splitlines() if line.strip()]
@@ -2539,7 +2380,6 @@ async def change_reqs_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
-    runtime_log("change_reqs_save", user_id=user_id, selected_geo=selected_geo, lines_count=len(lines))
     update_geo_requisites(selected_geo, lines[0], lines[1], "" if lines[2] == "-" else lines[2], lines[3])
     log_bot_activity(user_id, "update_requisites", geo_code=selected_geo, payload=lines[1])
     await update.effective_message.reply_text(
@@ -2688,14 +2528,6 @@ async def change_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
     manager = get_default_manager_for_geo(selected_geo) or {}
-    runtime_log(
-        "change_manager_start",
-        user_id=user_id,
-        selected_geo=selected_geo,
-        manager_id=manager.get("id"),
-        manager_name=manager.get("manager_name"),
-        manager_url=manager.get("manager_telegram_url"),
-    )
     manager_name = manager.get("manager_name") or "не задан"
     manager_link = manager.get("manager_telegram_url") or "не указан"
     if manager.get("id"):
@@ -2721,13 +2553,9 @@ async def change_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def change_manager_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if await handle_menu_interrupt(update, context):
-        return ConversationHandler.END
-
     choice = (update.effective_message.text or "").strip()
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
-    runtime_log("change_manager_action", user_id=user_id, selected_geo=selected_geo, choice=choice)
     if choice == MANAGER_KEEP_OPTION:
         await update.effective_message.reply_text(
             f"Настройки менеджера для {selected_geo} оставлены без изменений.",
@@ -2752,9 +2580,6 @@ async def change_manager_action(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def change_manager_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if await handle_menu_interrupt(update, context):
-        return ConversationHandler.END
-
     lines = [line.strip() for line in update.effective_message.text.strip().splitlines()]
     if len(lines) < 2 or not lines[0]:
         await update.effective_message.reply_text("Нужно 2 строки: имя менеджера и Telegram-ссылка.")
@@ -2762,7 +2587,6 @@ async def change_manager_save(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
-    runtime_log("change_manager_save", user_id=user_id, selected_geo=selected_geo, lines_count=len(lines))
     saved_manager = save_geo_manager(
         ManagerPayload(
             manager_id=None,
@@ -2787,7 +2611,6 @@ async def create_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return ConversationHandler.END
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
-    runtime_log("create_link_start", user_id=user_id, selected_geo=selected_geo)
     context.user_data.pop("temp_amount", None)
     context.user_data.pop("temp_requisites_id", None)
     context.user_data.pop("temp_manager_id", None)
@@ -2801,9 +2624,6 @@ async def create_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def create_link_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if await handle_menu_interrupt(update, context):
-        return ConversationHandler.END
-
     amount = parse_payment_amount(update.effective_message.text)
     if amount is None:
         await update.effective_message.reply_text("Нужно ввести положительную сумму, например: 250")
@@ -2815,13 +2635,6 @@ async def create_link_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
     active_requisites = get_active_requisites(selected_geo)
     active_requisites_id = active_requisites.get("id")
     context.user_data["temp_requisites_id"] = active_requisites_id if active_requisites_id else None
-    runtime_log(
-        "create_link_amount",
-        user_id=user_id,
-        selected_geo=selected_geo,
-        amount=amount,
-        active_requisites_id=active_requisites_id,
-    )
     await update.effective_message.reply_text(
         f"Использую активные реквизиты GEO {selected_geo}: "
         f"ID {active_requisites_id if active_requisites_id else 'latest'}.\n"
@@ -2832,9 +2645,6 @@ async def create_link_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def create_link_requisites(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if await handle_menu_interrupt(update, context):
-        return ConversationHandler.END
-
     raw_value = update.effective_message.text.strip().lower()
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
@@ -2851,9 +2661,6 @@ async def create_link_requisites(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def create_link_manager(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if await handle_menu_interrupt(update, context):
-        return ConversationHandler.END
-
     raw_text = update.effective_message.text.strip()
     raw_value = raw_text.lower()
     user_id = update.effective_user.id if update.effective_user else None
@@ -2874,22 +2681,11 @@ async def create_link_manager(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     context.user_data["temp_manager_id"] = manager_id
     context.user_data["temp_manager_link"] = manager_link
-    runtime_log(
-        "create_link_manager",
-        user_id=user_id,
-        selected_geo=selected_geo,
-        manager_id=manager_id,
-        manager_link=manager_link,
-        raw_text=raw_text,
-    )
     await update.effective_message.reply_text(build_link_language_selection_text())
     return WAITING_LINK_LANGUAGE
 
 
 async def create_link_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if await handle_menu_interrupt(update, context):
-        return ConversationHandler.END
-
     raw_value = update.effective_message.text.strip().lower()
     safe_language: str | None = None
     if raw_value not in {"-", "auto"}:
@@ -2907,9 +2703,6 @@ async def create_link_language(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def create_link_label(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if await handle_menu_interrupt(update, context):
-        return ConversationHandler.END
-
     label = update.effective_message.text.strip()
     if label != "-" and not payment_label_has_only_latin(label):
         await update.effective_message.reply_text(
@@ -2926,9 +2719,6 @@ async def create_link_label(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if await handle_menu_interrupt(update, context):
-        return ConversationHandler.END
-
     amount = float(context.user_data.get("temp_amount", 0))
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
@@ -2939,18 +2729,6 @@ async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE
     clean_label = str(context.user_data.get("temp_label", ""))
     comment = update.effective_message.text.strip()
     clean_comment = "" if comment == "-" else clean_payment_comment(comment)
-    runtime_log(
-        "create_link_comment_started",
-        user_id=user_id,
-        selected_geo=selected_geo,
-        amount=amount,
-        requisites_id=requisites_id,
-        manager_id=manager_id,
-        manager_link=manager_link,
-        language=forced_language,
-        label=clean_label,
-        comment=clean_comment,
-    )
     try:
         link = build_payment_link(
             amount,
@@ -2982,16 +2760,6 @@ async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.pop("temp_language", None)
     context.user_data.pop("temp_label", None)
     log_bot_activity(user_id, "create_link", geo_code=selected_geo, payload=f"{amount:.2f}")
-    runtime_log(
-        "create_link_comment_completed",
-        user_id=user_id,
-        selected_geo=selected_geo,
-        amount=amount,
-        requisites_id=requisites_id,
-        manager_name=manager.get("manager_name"),
-        manager_link=manager.get("manager_telegram_url"),
-        link=link,
-    )
     await update.effective_message.reply_text(
         f"Ссылка готова.\n\n"
         f"GEO: {selected_geo}\n"
@@ -3087,13 +2855,6 @@ if bot_app is not None:
 async def lifespan(app: FastAPI):
     global BOT_RUNTIME_ERROR, BOT_RUNTIME_STARTED
 
-    runtime_log(
-        "lifespan_starting",
-        db_path=DB_FILE,
-        db_exists=DB_FILE.exists(),
-        bot_enabled=BOT_ENABLED,
-        web_url=WEB_URL,
-    )
     if bot_app is not None:
         try:
             await bot_app.initialize()
@@ -3102,11 +2863,9 @@ async def lifespan(app: FastAPI):
                 await bot_app.updater.start_polling()
             BOT_RUNTIME_STARTED = True
             BOT_RUNTIME_ERROR = None
-            runtime_log("bot_runtime_started", updater_running=bot_app.updater is not None)
         except Exception as exc:
             BOT_RUNTIME_STARTED = False
             BOT_RUNTIME_ERROR = str(exc)
-            runtime_log("bot_runtime_failed", level=logging.ERROR, error=str(exc))
 
     yield
 
@@ -3116,51 +2875,11 @@ async def lifespan(app: FastAPI):
                 await bot_app.updater.stop()
             await bot_app.stop()
             await bot_app.shutdown()
-            runtime_log("bot_runtime_stopped")
         except Exception:
             pass
 
 
 app = FastAPI(lifespan=lifespan)
-
-
-@app.middleware("http")
-async def runtime_logging_middleware(request: Request, call_next):
-    request_id = secrets.token_hex(6)
-    started_at = time.perf_counter()
-    runtime_log(
-        "http_request_started",
-        request_id=request_id,
-        method=request.method,
-        path=str(request.url.path),
-        query=request.url.query,
-        client_ip=request.client.host if request.client else None,
-    )
-    try:
-        response = await call_next(request)
-    except Exception as exc:
-        runtime_log(
-            "http_request_failed",
-            level=logging.ERROR,
-            request_id=request_id,
-            method=request.method,
-            path=str(request.url.path),
-            error=str(exc),
-            elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2),
-        )
-        raise
-
-    elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
-    response.headers["X-Request-ID"] = request_id
-    runtime_log(
-        "http_request_completed",
-        request_id=request_id,
-        method=request.method,
-        path=str(request.url.path),
-        status_code=response.status_code,
-        elapsed_ms=elapsed_ms,
-    )
-    return response
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -3189,11 +2908,8 @@ async def admin_page() -> FileResponse:
 async def healthcheck():
     return {
         "status": "ok",
-        "build_tag": APP_BUILD_TAG,
-        "instance_id": APP_INSTANCE_ID,
         "bot": get_bot_status(),
         "database_exists": DB_FILE.exists(),
-        "db_path": str(DB_FILE),
     }
 
 
