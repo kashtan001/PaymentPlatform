@@ -105,8 +105,9 @@ MENU_BUTTON_LABELS = {
     "🛠 Админка",
     "ℹ️ Помощь",
 }
-MANAGER_KEEP_OPTION = "✅ Оставить текущие настройки"
-MANAGER_EDIT_OPTION = "✏️ Изменить имя/ссылку"
+MANAGER_KEEP_OPTION = "✅ Оставить текущего"
+MANAGER_ADD_OPTION = "➕ Добавить нового"
+MANAGER_EDIT_OPTION_LEGACY = "✏️ Изменить имя/ссылку"
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
@@ -1952,7 +1953,7 @@ def geo_picker_keyboard() -> ReplyKeyboardMarkup:
 
 def manager_action_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        [[MANAGER_KEEP_OPTION], [MANAGER_EDIT_OPTION]],
+        [[MANAGER_KEEP_OPTION], [MANAGER_ADD_OPTION]],
         resize_keyboard=True,
         one_time_keyboard=True,
     )
@@ -2534,7 +2535,7 @@ async def change_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
             f"Текущий GEO: {selected_geo}\n"
             f"Менеджер по умолчанию: {manager_name}\n"
             f"Telegram: {manager_link}\n\n"
-            "Что сделать с менеджером?",
+            "Выберите действие: оставить текущего или добавить нового.",
             reply_markup=manager_action_keyboard(),
         )
         return WAITING_MANAGER_ACTION
@@ -2561,7 +2562,7 @@ async def change_manager_action(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=main_keyboard(get_bot_user_role(user_id)),
         )
         return ConversationHandler.END
-    if choice == MANAGER_EDIT_OPTION:
+    if choice in {MANAGER_ADD_OPTION, MANAGER_EDIT_OPTION_LEGACY}:
         await update.effective_message.reply_text(
             f"Текущий GEO: {selected_geo}\n"
             "Отправьте две строки:\n"
@@ -2572,7 +2573,7 @@ async def change_manager_action(update: Update, context: ContextTypes.DEFAULT_TY
         return WAITING_MANAGER
 
     await update.effective_message.reply_text(
-        "Выберите вариант кнопкой ниже: оставить текущие настройки или изменить имя/ссылку.",
+        "Выберите вариант кнопкой ниже: оставить текущего или добавить нового.",
         reply_markup=manager_action_keyboard(),
     )
     return WAITING_MANAGER_ACTION
@@ -2586,10 +2587,18 @@ async def change_manager_save(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
-    saved_manager = update_geo_manager(selected_geo, lines[0], lines[1])
+    saved_manager = save_geo_manager(
+        ManagerPayload(
+            manager_id=None,
+            geo_code=selected_geo,
+            manager_name=lines[0],
+            manager_telegram_url=lines[1],
+            make_default=True,
+        )
+    )
     log_bot_activity(user_id, "update_manager", geo_code=selected_geo, payload=lines[0])
     await update.effective_message.reply_text(
-        f"Менеджер для {selected_geo} обновлен.\n\n"
+        f"Новый менеджер для {selected_geo} добавлен и назначен по умолчанию.\n\n"
         f"ID: {saved_manager.get('id')}\n"
         f"{build_geo_details_text(selected_geo)}",
         reply_markup=main_keyboard(get_bot_user_role(user_id)),
