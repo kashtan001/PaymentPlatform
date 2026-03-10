@@ -3,6 +3,7 @@ import os
 import re
 import secrets
 import sqlite3
+import unicodedata
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -354,8 +355,53 @@ def clean_payment_comment(raw_value: str | None) -> str:
     return value[:300]
 
 
+def normalize_button_text(value: str | None) -> str:
+    text = unicodedata.normalize("NFKC", (value or ""))
+    text = text.replace("\ufe0f", "")
+    text = re.sub(r"\s+", " ", text).strip().lower()
+    return text
+
+
+def is_main_menu_text(value: str | None) -> bool:
+    text = normalize_button_text(value)
+    if not text:
+        return False
+    normalized_labels = {normalize_button_text(label) for label in MENU_BUTTON_LABELS}
+    if text in normalized_labels:
+        return True
+    # Fallback on keywords in case Telegram sends emoji-variant text.
+    menu_keywords = (
+        "выбрать geo",
+        "geo статус",
+        "активные реквизиты",
+        "реквизиты",
+        "история реквизитов",
+        "удалить реквизит",
+        "менеджер",
+        "права доступа",
+        "ссылка на оплату",
+        "админка",
+        "помощь",
+    )
+    return any(keyword in text for keyword in menu_keywords)
+
+
 def is_menu_button_text(text: str | None) -> bool:
-    return (text or "").strip() in MENU_BUTTON_LABELS
+    return is_main_menu_text(text)
+
+
+async def handle_menu_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    message = update.effective_message
+    if message is None:
+        return False
+    if not is_main_menu_text(message.text):
+        return False
+    user_id = update.effective_user.id if update.effective_user else None
+    await message.reply_text(
+        "Текущий шаг отменен. Нажмите нужную кнопку еще раз.",
+        reply_markup=main_keyboard(get_bot_user_role(user_id)),
+    )
+    return True
 
 
 def parse_payment_amount(raw_value: str | None) -> float | None:
@@ -2328,6 +2374,9 @@ async def select_geo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def select_geo_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if await handle_menu_interrupt(update, context):
+        return ConversationHandler.END
+
     geo_code = sanitize_geo_code(update.effective_message.text)
     if not geo_code:
         await update.effective_message.reply_text("Поддерживаются только ES, IT, DE и FR.")
@@ -2365,12 +2414,7 @@ async def change_reqs_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def change_reqs_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    incoming_text = update.effective_message.text
-    if is_menu_button_text(incoming_text):
-        await update.effective_message.reply_text(
-            "Текущий ввод реквизитов отменен. Нажмите нужную кнопку еще раз.",
-            reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
-        )
+    if await handle_menu_interrupt(update, context):
         return ConversationHandler.END
 
     lines = [line.strip() for line in update.effective_message.text.strip().splitlines() if line.strip()]
@@ -2553,6 +2597,9 @@ async def change_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def change_manager_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if await handle_menu_interrupt(update, context):
+        return ConversationHandler.END
+
     choice = (update.effective_message.text or "").strip()
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
@@ -2580,6 +2627,9 @@ async def change_manager_action(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def change_manager_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if await handle_menu_interrupt(update, context):
+        return ConversationHandler.END
+
     lines = [line.strip() for line in update.effective_message.text.strip().splitlines()]
     if len(lines) < 2 or not lines[0]:
         await update.effective_message.reply_text("Нужно 2 строки: имя менеджера и Telegram-ссылка.")
@@ -2624,6 +2674,9 @@ async def create_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def create_link_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if await handle_menu_interrupt(update, context):
+        return ConversationHandler.END
+
     amount = parse_payment_amount(update.effective_message.text)
     if amount is None:
         await update.effective_message.reply_text("Нужно ввести положительную сумму, например: 250")
@@ -2645,6 +2698,9 @@ async def create_link_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def create_link_requisites(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if await handle_menu_interrupt(update, context):
+        return ConversationHandler.END
+
     raw_value = update.effective_message.text.strip().lower()
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
@@ -2661,6 +2717,9 @@ async def create_link_requisites(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def create_link_manager(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if await handle_menu_interrupt(update, context):
+        return ConversationHandler.END
+
     raw_text = update.effective_message.text.strip()
     raw_value = raw_text.lower()
     user_id = update.effective_user.id if update.effective_user else None
@@ -2686,6 +2745,9 @@ async def create_link_manager(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def create_link_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if await handle_menu_interrupt(update, context):
+        return ConversationHandler.END
+
     raw_value = update.effective_message.text.strip().lower()
     safe_language: str | None = None
     if raw_value not in {"-", "auto"}:
@@ -2703,6 +2765,9 @@ async def create_link_language(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def create_link_label(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if await handle_menu_interrupt(update, context):
+        return ConversationHandler.END
+
     label = update.effective_message.text.strip()
     if label != "-" and not payment_label_has_only_latin(label):
         await update.effective_message.reply_text(
@@ -2719,6 +2784,9 @@ async def create_link_label(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if await handle_menu_interrupt(update, context):
+        return ConversationHandler.END
+
     amount = float(context.user_data.get("temp_amount", 0))
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
