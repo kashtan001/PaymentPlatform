@@ -46,6 +46,78 @@
             border: 1px solid rgba(255, 255, 255, 0.08);
             background: rgba(255, 255, 255, 0.04);
         }
+
+        .accent-shell {
+            border-color: rgba(52, 211, 153, 0.35);
+            background: rgba(16, 185, 129, 0.08);
+            box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.08);
+        }
+
+        .panel-title {
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+            flex-wrap: wrap;
+        }
+
+        .info-trigger {
+            position: relative;
+            display: inline-flex;
+        }
+
+        .info-button {
+            display: inline-flex;
+            height: 1.8rem;
+            width: 1.8rem;
+            align-items: center;
+            justify-content: center;
+            border-radius: 9999px;
+            border: 1px solid rgba(52, 211, 153, 0.25);
+            background: rgba(16, 185, 129, 0.10);
+            color: rgba(167, 243, 208, 0.98);
+            font-size: 0.82rem;
+            font-weight: 700;
+            line-height: 1;
+            transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease;
+        }
+
+        .info-trigger:hover .info-button,
+        .info-trigger:focus-within .info-button {
+            border-color: rgba(52, 211, 153, 0.45);
+            background: rgba(16, 185, 129, 0.18);
+            transform: translateY(-1px);
+        }
+
+        .info-button:focus-visible {
+            outline: 2px solid rgba(74, 222, 128, 0.45);
+            outline-offset: 2px;
+        }
+
+        .info-text {
+            position: absolute;
+            top: calc(100% + 0.75rem);
+            right: 0;
+            z-index: 40;
+            width: min(22rem, calc(100vw - 3rem));
+            border-radius: 1rem;
+            border: 1px solid rgba(52, 211, 153, 0.22);
+            background: rgba(14, 22, 18, 0.96);
+            padding: 0.95rem 1rem;
+            color: rgba(228, 228, 231, 0.96);
+            font-size: 0.875rem;
+            line-height: 1.55;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(4px);
+            transition: opacity 0.18s ease, transform 0.18s ease;
+            box-shadow: 0 18px 45px rgba(0, 0, 0, 0.35);
+        }
+
+        .info-trigger:hover .info-text,
+        .info-trigger:focus-within .info-text {
+            opacity: 1;
+            transform: translateY(0);
+        }
     </style>
 </head>
 <body x-data="adminApp()" x-init="init()" class="font-sans text-white">
@@ -118,6 +190,133 @@
                 </div>
             </header>
 
+            <div class="grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
+                <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Priority requisites</p>
+                            <div class="mt-2 panel-title">
+                                <h2 class="text-xl font-semibold">Новый комплект реквизитов</h2>
+                                <div class="info-trigger">
+                                    <button type="button" class="info-button" aria-label="Описание блока новых реквизитов">i</button>
+                                    <div class="info-text">
+                                        Создаёт новый комплект для выбранного GEO и сразу добавляет его в историю. Потом этот комплект можно использовать в ссылке или вернуть активным одним кликом.
+                                    </div>
+                                </div>
+                            </div>
+                            <p class="mt-3 text-sm text-zinc-400">Блок вынесен наверх, чтобы можно было быстро добавить новый комплект без длинной прокрутки панели.</p>
+                        </div>
+                    </div>
+
+                    <div class="mt-5 rounded-[1.5rem] border border-emerald-400/20 bg-emerald-500/10 p-4">
+                        <p class="text-xs uppercase tracking-[0.24em] text-emerald-200/80">Подсказка</p>
+                        <p class="mt-2 text-sm text-emerald-50">Сначала выбери GEO. Язык подтянется из текущего профиля GEO, чтобы было сразу видно, в каком контексте ты работаешь.</p>
+                        <div class="mt-4 flex flex-wrap gap-2">
+                            <template x-for="geo in geos()" :key="`priority-${geo.profile.geo_code}`">
+                                <button type="button"
+                                        @click="selectGeo(geo.profile.geo_code)"
+                                        class="rounded-full px-4 py-2 text-sm font-semibold transition"
+                                        :class="editingGeoCode === geo.profile.geo_code ? 'bg-emerald-300 text-emerald-950' : 'border border-emerald-300/20 text-emerald-50 hover:bg-emerald-400/10'">
+                                    <span x-text="geo.profile.geo_code"></span>
+                                </button>
+                            </template>
+                        </div>
+                        <div class="mt-4 flex flex-wrap gap-2 text-sm">
+                            <div class="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-emerald-50">
+                                <span class="text-emerald-200/80">Выбран GEO:</span>
+                                <span class="font-semibold" x-text="`${editingGeoCode} / ${currentGeoSnapshot()?.profile.geo_name || '—'}`"></span>
+                            </div>
+                            <div class="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-emerald-50">
+                                <span class="text-emerald-200/80">Язык GEO:</span>
+                                <span class="font-semibold" x-text="selectedGeoLanguageLabel()"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <form class="mt-5 space-y-4" @submit.prevent="saveRequisites">
+                        <div class="rounded-[1.4rem] border border-white/10 bg-white/5 px-4 py-3 text-sm text-zinc-300">
+                            Новый комплект будет сохранён для GEO
+                            <span class="font-semibold text-white" x-text="editingGeoCode"></span>.
+                            Активный язык этого GEO:
+                            <span class="font-semibold text-white" x-text="selectedGeoLanguageLabel()"></span>.
+                        </div>
+                        <div class="grid gap-4 sm:grid-cols-4">
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">Банк</span>
+                                <input type="text" x-model="requisitesForm.bank_name" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                            </label>
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">IBAN</span>
+                                <input type="text" x-model="requisitesForm.card_number" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                            </label>
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">BIC / SWIFT</span>
+                                <input type="text" x-model="requisitesForm.bic_swift" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                            </label>
+                            <label class="block">
+                                <span class="mb-2 block text-sm text-zinc-400">Получатель</span>
+                                <input type="text" x-model="requisitesForm.receiver_name" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                            </label>
+                        </div>
+                        <div x-show="requisitesMessage" x-cloak class="rounded-2xl bg-white/5 px-4 py-4 text-sm text-zinc-300" x-text="requisitesMessage"></div>
+                        <button type="submit" class="w-full rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Добавить реквизиты</button>
+                    </form>
+                </section>
+
+                <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Requisites history</p>
+                            <div class="mt-2 panel-title">
+                                <h2 class="text-xl font-semibold">История реквизитов</h2>
+                                <div class="info-trigger">
+                                    <button type="button" class="info-button" aria-label="Описание блока истории реквизитов">i</button>
+                                    <div class="info-text">
+                                        Архив всех сохранённых комплектов реквизитов. Любой комплект можно вернуть активным или удалить без ручного повторного ввода.
+                                    </div>
+                                </div>
+                            </div>
+                            <p class="mt-3 text-sm text-zinc-400">Теперь история стоит рядом с добавлением новых реквизитов, чтобы переключаться между ними без лишней прокрутки.</p>
+                        </div>
+                        <div class="rounded-full bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-zinc-300" x-text="`${(dashboard.requisites_history || []).length} записей`"></div>
+                    </div>
+
+                    <div x-show="!(dashboard.requisites_history || []).length" x-cloak class="mt-5 rounded-[1.4rem] bg-white/5 px-4 py-4 text-sm text-zinc-400">
+                        История пока пустая. Новые комплекты появятся здесь сразу после сохранения.
+                    </div>
+
+                    <div class="mt-5 max-h-[34rem] space-y-3 overflow-y-auto pr-1">
+                        <template x-for="item in dashboard.requisites_history || []" :key="item.id">
+                            <div class="rounded-[1.4rem] bg-white/5 p-4">
+                                <div class="flex items-center justify-between gap-3">
+                                    <div>
+                                        <p class="text-xs uppercase tracking-[0.24em] text-zinc-500" x-text="item.geo_code"></p>
+                                        <div class="mt-2 text-sm font-semibold" x-text="item.bank_name"></div>
+                                    </div>
+                                    <div class="text-xs text-zinc-500" x-text="formatDate(item.created_at)"></div>
+                                </div>
+                                <div class="mt-2 font-mono text-xs text-zinc-300" x-text="item.card_number"></div>
+                                <div class="mt-2 font-mono text-xs text-zinc-400" x-text="item.bic_swift || 'BIC / SWIFT не указан'"></div>
+                                <div class="mt-2 text-sm text-zinc-400" x-text="item.receiver_name"></div>
+                                <div class="mt-2 text-xs text-zinc-500">ID снимка: <span x-text="item.id"></span></div>
+                                <div class="mt-3 flex flex-wrap gap-2">
+                                    <button type="button"
+                                            @click="applyHistoryItem(item)"
+                                            class="rounded-full border border-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-white hover:text-black">
+                                        Сделать активными
+                                    </button>
+                                    <button type="button"
+                                            @click="deleteHistoryItem(item)"
+                                            class="rounded-full border border-red-500/30 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-red-300">
+                                        Удалить
+                                    </button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </section>
+            </div>
+
             <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
                 <template x-for="card in statCards()" :key="card.label">
                     <div class="panel rounded-[1.7rem] p-5 shadow-panel">
@@ -129,10 +328,18 @@
 
             <div class="grid gap-5 xl:grid-cols-2">
                 <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
-                    <div class="flex items-center justify-between gap-3">
+                    <div class="flex items-start justify-between gap-3">
                         <div>
                             <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Telegram bot</p>
-                            <h2 class="mt-2 text-xl font-semibold">Статус внутренней панели</h2>
+                            <div class="mt-2 panel-title">
+                                <h2 class="text-xl font-semibold">Статус внутренней панели</h2>
+                                <div class="info-trigger">
+                                    <button type="button" class="info-button" aria-label="Описание блока статуса панели">i</button>
+                                    <div class="info-text">
+                                        Показывает, жив ли внутренний Telegram-бот, сколько у него сотрудников и есть ли ошибки запуска. Связан с доступами и действиями сотрудников.
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                         <div class="rounded-full px-3 py-2 text-xs font-semibold uppercase tracking-[0.24em]"
                              :class="dashboard.bot?.control_panel_ready ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'">
@@ -175,13 +382,40 @@
                 </section>
 
                 <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
-                    <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Quick actions</p>
-                    <h2 class="mt-2 text-xl font-semibold">Генератор ссылки</h2>
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Quick actions</p>
+                            <div class="mt-2 panel-title">
+                                <h2 class="text-xl font-semibold">Генератор ссылки</h2>
+                                <div class="info-trigger">
+                                    <button type="button" class="info-button" aria-label="Описание генератора ссылки">i</button>
+                                    <div class="info-text">
+                                        Собирает клиентскую ссылку. GEO определяет доступные реквизиты и менеджеров, а язык отвечает за локализацию лендинга для клиента.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <form class="mt-5 space-y-4" @submit.prevent="buildLink">
+                        <div class="rounded-[1.5rem] border border-emerald-400/20 bg-emerald-500/10 p-4 text-sm text-emerald-50">
+                            <p class="text-xs uppercase tracking-[0.24em] text-emerald-200/80">Подсказка</p>
+                            <p class="mt-2">Сначала выбери GEO и язык лендинга. GEO меняет доступные реквизиты и менеджеров, а язык влияет только на тексты и локализацию страницы оплаты.</p>
+                            <div class="mt-4 flex flex-wrap gap-2 text-sm">
+                                <div class="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-emerald-50">
+                                    <span class="text-emerald-200/80">GEO:</span>
+                                    <span class="font-semibold" x-text="`${linkGeoSnapshot()?.profile.geo_code || linkForm.geo_code || editingGeoCode} / ${linkGeoSnapshot()?.profile.geo_name || '—'}`"></span>
+                                </div>
+                                <div class="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-emerald-50">
+                                    <span class="text-emerald-200/80">Язык:</span>
+                                    <span class="font-semibold" x-text="linkLanguageLabel()"></span>
+                                </div>
+                            </div>
+                        </div>
                         <div class="grid gap-4 sm:grid-cols-2">
-                            <label class="block">
-                                <span class="mb-2 block text-sm text-zinc-400">GEO</span>
-                                <select x-model="linkForm.geo_code" @change="syncLinkSelections()" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                            <label class="block rounded-[1.5rem] border border-emerald-400/20 bg-emerald-500/10 p-3">
+                                <span class="mb-2 block text-sm text-emerald-100">GEO</span>
+                                <p class="mb-3 text-xs text-emerald-200/80">Определяет активные реквизиты, менеджеров и рабочий контекст для ссылки.</p>
+                                <select x-model="linkForm.geo_code" @change="syncLinkSelections()" class="input-shell accent-shell w-full rounded-2xl px-4 py-4 outline-none">
                                     <template x-for="geo in geos()" :key="geo.profile.geo_code">
                                         <option :value="geo.profile.geo_code" x-text="geo.profile.geo_code"></option>
                                     </template>
@@ -193,9 +427,10 @@
                             </label>
                         </div>
                         <div class="grid gap-4 sm:grid-cols-3">
-                            <label class="block">
-                                <span class="mb-2 block text-sm text-zinc-400">Язык лендинга</span>
-                                <select x-model="linkForm.language_code" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                            <label class="block rounded-[1.5rem] border border-emerald-400/20 bg-emerald-500/10 p-3">
+                                <span class="mb-2 block text-sm text-emerald-100">Язык лендинга</span>
+                                <p class="mb-3 text-xs text-emerald-200/80">Если оставить авто, лендинг сам подстроится под устройство и IP клиента.</p>
+                                <select x-model="linkForm.language_code" class="input-shell accent-shell w-full rounded-2xl px-4 py-4 outline-none">
                                     <option value="auto">Авто по устройству / IP</option>
                                     <template x-for="language in languageOptions()" :key="language.code">
                                         <option :value="language.code" x-text="`${language.label} (${language.code})`"></option>
@@ -243,7 +478,15 @@
                 <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                     <div>
                         <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Geo snapshots</p>
-                        <h2 class="mt-2 text-xl font-semibold">Активные реквизиты по GEO</h2>
+                        <div class="mt-2 panel-title">
+                            <h2 class="text-xl font-semibold">Активные реквизиты по GEO</h2>
+                            <div class="info-trigger">
+                                <button type="button" class="info-button" aria-label="Описание блока активных реквизитов">i</button>
+                                <div class="info-text">
+                                    Быстрый снимок по каждому GEO: активный комплект, менеджер по умолчанию и таймер. Отсюда удобно переключать GEO для редактора, менеджеров и новых реквизитов.
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     <div class="flex flex-wrap gap-2">
                         <template x-for="geo in geos()" :key="geo.profile.geo_code">
@@ -281,12 +524,28 @@
 
             <div class="grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
                 <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
-                    <div class="flex items-center justify-between gap-3">
+                    <div class="flex items-start justify-between gap-3">
                         <div>
                             <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Editor</p>
-                            <h2 class="mt-2 text-xl font-semibold">Редактор GEO</h2>
+                            <div class="mt-2 panel-title">
+                                <h2 class="text-xl font-semibold">Редактор GEO</h2>
+                                <div class="info-trigger">
+                                    <button type="button" class="info-button" aria-label="Описание редактора GEO">i</button>
+                                    <div class="info-text">
+                                        Меняет название GEO, язык по умолчанию, автообновление и дефолтного менеджера. Эти настройки используются в лендинге и в генераторе ссылок.
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                         <div class="rounded-full bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-zinc-300" x-text="editingGeoCode"></div>
+                    </div>
+
+                    <div class="mt-5 rounded-[1.5rem] border border-emerald-400/20 bg-emerald-500/10 p-4 text-sm text-emerald-50">
+                        <p class="text-xs uppercase tracking-[0.24em] text-emerald-200/80">Подсказка</p>
+                        <p class="mt-2">
+                            Сейчас редактируется GEO <span class="font-semibold" x-text="editingGeoCode"></span>.
+                            Язык по умолчанию используется, когда в ссылке не передан отдельный параметр <span class="font-mono">lang</span>.
+                        </p>
                     </div>
 
                     <form class="mt-5 space-y-4" @submit.prevent="saveGeo">
@@ -331,38 +590,19 @@
 
                 <div class="space-y-5">
                     <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
-                        <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Requisites</p>
-                        <h2 class="mt-2 text-xl font-semibold">Новый комплект реквизитов</h2>
-                        <p class="mt-3 text-sm text-zinc-400">Добавляй новые реквизиты как отдельные наборы. Потом их можно выбрать по ID в генераторе ссылки.</p>
-
-                        <form class="mt-5 space-y-4" @submit.prevent="saveRequisites">
-                            <div class="grid gap-4 sm:grid-cols-4">
-                                <label class="block">
-                                    <span class="mb-2 block text-sm text-zinc-400">Банк</span>
-                                    <input type="text" x-model="requisitesForm.bank_name" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
-                                </label>
-                                <label class="block">
-                                    <span class="mb-2 block text-sm text-zinc-400">IBAN</span>
-                                    <input type="text" x-model="requisitesForm.card_number" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
-                                </label>
-                                <label class="block">
-                                    <span class="mb-2 block text-sm text-zinc-400">BIC / SWIFT</span>
-                                    <input type="text" x-model="requisitesForm.bic_swift" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
-                                </label>
-                                <label class="block">
-                                    <span class="mb-2 block text-sm text-zinc-400">Получатель</span>
-                                    <input type="text" x-model="requisitesForm.receiver_name" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
-                                </label>
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Managers</p>
+                            <div class="mt-2 panel-title">
+                                <h2 class="text-xl font-semibold">Справочник менеджеров</h2>
+                                <div class="info-trigger">
+                                    <button type="button" class="info-button" aria-label="Описание блока менеджеров">i</button>
+                                    <div class="info-text">
+                                        Отдельный справочник менеджеров по GEO. Менеджеров можно выбирать в ссылке или назначать менеджером GEO по умолчанию.
+                                    </div>
+                                </div>
                             </div>
-                            <div x-show="requisitesMessage" x-cloak class="rounded-2xl bg-white/5 px-4 py-4 text-sm text-zinc-300" x-text="requisitesMessage"></div>
-                            <button type="submit" class="w-full rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Добавить реквизиты</button>
-                        </form>
-                    </section>
-
-                    <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
-                        <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Managers</p>
-                        <h2 class="mt-2 text-xl font-semibold">Справочник менеджеров</h2>
-                        <p class="mt-3 text-sm text-zinc-400">Менеджеры теперь живут отдельно от GEO. Выбирай их в ссылке или назначай по умолчанию для GEO.</p>
+                            <p class="mt-3 text-sm text-zinc-400">Менеджеры теперь живут отдельно от GEO. Выбирай их в ссылке или назначай по умолчанию для GEO.</p>
+                        </div>
 
                         <form class="mt-5 space-y-4" @submit.prevent="saveManager">
                             <div class="grid gap-4 sm:grid-cols-2">
@@ -399,8 +639,18 @@
                     </section>
 
                     <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
-                        <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Traffic intelligence</p>
-                        <h2 class="mt-2 text-xl font-semibold">Гео и языки</h2>
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Traffic intelligence</p>
+                            <div class="mt-2 panel-title">
+                                <h2 class="text-xl font-semibold">Гео и языки</h2>
+                                <div class="info-trigger">
+                                    <button type="button" class="info-button" aria-label="Описание блока гео и языков">i</button>
+                                    <div class="info-text">
+                                        Статистика по странам, GEO и языкам лендинга. Помогает понять, откуда приходит трафик и какая локаль используется чаще.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
 
                         <div class="mt-5 space-y-4">
                             <div>
@@ -433,8 +683,18 @@
                     </section>
 
                     <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
-                        <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Selected GEO</p>
-                        <h2 class="mt-2 text-xl font-semibold">Текущий профиль</h2>
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Selected GEO</p>
+                            <div class="mt-2 panel-title">
+                                <h2 class="text-xl font-semibold">Текущий профиль</h2>
+                                <div class="info-trigger">
+                                    <button type="button" class="info-button" aria-label="Описание текущего профиля GEO">i</button>
+                                    <div class="info-text">
+                                        Краткая карточка текущего GEO, который сейчас редактируется. Связана с редактором, менеджерами и новыми реквизитами.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
 
                         <div x-show="currentGeoSnapshot()" x-cloak class="mt-5 rounded-[1.6rem] bg-white/5 p-4">
                             <template x-if="currentGeoSnapshot()">
@@ -461,11 +721,21 @@
                     </section>
 
                     <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
-                        <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Access control</p>
-                        <h2 class="mt-2 text-xl font-semibold">Роли в Telegram-боте</h2>
-                        <p class="mt-3 text-sm text-zinc-400">
-                            Обработчик: только ссылки. Процессор: только реквизиты. Админ: полный доступ.
-                        </p>
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Access control</p>
+                            <div class="mt-2 panel-title">
+                                <h2 class="text-xl font-semibold">Роли в Telegram-боте</h2>
+                                <div class="info-trigger">
+                                    <button type="button" class="info-button" aria-label="Описание блока ролей">i</button>
+                                    <div class="info-text">
+                                        Права сотрудников в Telegram-боте. Роль определяет, кто может только собирать ссылки, а кто менять реквизиты, менеджеров и доступы.
+                                    </div>
+                                </div>
+                            </div>
+                            <p class="mt-3 text-sm text-zinc-400">
+                                Обработчик: только ссылки. Процессор: только реквизиты. Админ: полный доступ.
+                            </p>
+                        </div>
 
                         <form class="mt-5 space-y-4" @submit.prevent="saveBotUser">
                             <div class="grid gap-4 sm:grid-cols-2">
@@ -515,11 +785,21 @@
                     </section>
 
                     <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
-                        <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Workers</p>
-                        <h2 class="mt-2 text-xl font-semibold">Сотрудники и их действия</h2>
-                        <p class="mt-3 text-sm text-zinc-400">
-                            Тут видно, кто работает в боте, какие у него контакты и что он делал в системе.
-                        </p>
+                        <div>
+                            <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Workers</p>
+                            <div class="mt-2 panel-title">
+                                <h2 class="text-xl font-semibold">Сотрудники и их действия</h2>
+                                <div class="info-trigger">
+                                    <button type="button" class="info-button" aria-label="Описание блока сотрудников">i</button>
+                                    <div class="info-text">
+                                        Активность сотрудников: кто что делал и когда. Полезно для контроля работы, разбора ошибок и проверки изменений в боте.
+                                    </div>
+                                </div>
+                            </div>
+                            <p class="mt-3 text-sm text-zinc-400">
+                                Тут видно, кто работает в боте, какие у него контакты и что он делал в системе.
+                            </p>
+                        </div>
 
                         <div class="mt-5 space-y-3">
                             <template x-for="item in workerStats()" :key="item.user_id">
@@ -571,10 +851,20 @@
                 </div>
             </div>
 
-            <div class="grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
+            <div class="grid gap-5">
                 <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
-                    <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Visitor feed</p>
-                    <h2 class="mt-2 text-xl font-semibold">Последние посещения</h2>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Visitor feed</p>
+                        <div class="mt-2 panel-title">
+                            <h2 class="text-xl font-semibold">Последние посещения</h2>
+                            <div class="info-trigger">
+                                <button type="button" class="info-button" aria-label="Описание ленты посещений">i</button>
+                                <div class="info-text">
+                                    Живой список визитов на лендинг с GEO, языком, суммой и показанными реквизитами. Нужен для оперативного контроля трафика и проверки выдачи данных клиенту.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
 
                     <div class="mt-5 space-y-3">
                         <template x-for="visit in dashboard.visits || []" :key="visit.id">
@@ -631,44 +921,6 @@
                                 </div>
                                 <div class="mt-3 text-xs text-zinc-500" x-text="visit.user_agent"></div>
                                 <div class="mt-3 text-xs text-zinc-500" x-text="formatDate(visit.created_at)"></div>
-                            </div>
-                        </template>
-                    </div>
-                </section>
-
-                <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
-                    <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Requisites history</p>
-                    <h2 class="mt-2 text-xl font-semibold">История реквизитов</h2>
-                    <p class="mt-3 text-sm text-zinc-400">
-                        Старые рабочие реквизиты можно снова сделать активными одним нажатием, без ручного ввода.
-                    </p>
-
-                    <div class="mt-5 space-y-3">
-                        <template x-for="item in dashboard.requisites_history || []" :key="item.id">
-                            <div class="rounded-[1.4rem] bg-white/5 p-4">
-                                <div class="flex items-center justify-between gap-3">
-                                    <div>
-                                        <p class="text-xs uppercase tracking-[0.24em] text-zinc-500" x-text="item.geo_code"></p>
-                                        <div class="mt-2 text-sm font-semibold" x-text="item.bank_name"></div>
-                                    </div>
-                                    <div class="text-xs text-zinc-500" x-text="formatDate(item.created_at)"></div>
-                                </div>
-                                <div class="mt-2 font-mono text-xs text-zinc-300" x-text="item.card_number"></div>
-                                <div class="mt-2 font-mono text-xs text-zinc-400" x-text="item.bic_swift || 'BIC / SWIFT не указан'"></div>
-                                <div class="mt-2 text-sm text-zinc-400" x-text="item.receiver_name"></div>
-                                <div class="mt-2 text-xs text-zinc-500">ID снимка: <span x-text="item.id"></span></div>
-                                <div class="mt-3 flex flex-wrap gap-2">
-                                    <button type="button"
-                                            @click="applyHistoryItem(item)"
-                                            class="rounded-full border border-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-white hover:text-black">
-                                        Сделать активными
-                                    </button>
-                                    <button type="button"
-                                            @click="deleteHistoryItem(item)"
-                                            class="rounded-full border border-red-500/30 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-red-300">
-                                        Удалить
-                                    </button>
-                                </div>
                             </div>
                         </template>
                     </div>
@@ -751,6 +1003,18 @@
                     return this.dashboard.languages || [];
                 },
 
+                languageLabel(code) {
+                    const safeCode = String(code || "").toLowerCase();
+                    if (!safeCode) {
+                        return "не выбран";
+                    }
+                    if (safeCode === "auto") {
+                        return "Авто по устройству / IP";
+                    }
+                    const language = this.languageOptions().find((item) => item.code === safeCode);
+                    return language ? `${language.label} (${language.code})` : safeCode;
+                },
+
                 botUsers() {
                     return this.dashboard.bot_users || [];
                 },
@@ -769,6 +1033,19 @@
 
                 currentGeoSnapshot() {
                     return this.geos().find((item) => item.profile.geo_code === this.editingGeoCode) || null;
+                },
+
+                linkGeoSnapshot() {
+                    const targetCode = this.linkForm.geo_code || this.editingGeoCode;
+                    return this.geos().find((item) => item.profile.geo_code === targetCode) || null;
+                },
+
+                selectedGeoLanguageLabel() {
+                    return this.languageLabel(this.currentGeoSnapshot()?.profile?.default_language);
+                },
+
+                linkLanguageLabel() {
+                    return this.languageLabel(this.linkForm.language_code || "auto");
                 },
 
                 managersForGeo(geoCode) {

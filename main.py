@@ -82,13 +82,12 @@ WAITING_GEO_SELECTION = 1
 WAITING_REQUISITES = 2
 WAITING_MANAGER_ACTION = 3
 WAITING_MANAGER = 4
-WAITING_MANAGER_CONFIRM = 5
-WAITING_LINK_AMOUNT = 6
-WAITING_LINK_REQUISITES = 7
-WAITING_LINK_MANAGER = 8
-WAITING_LINK_LANGUAGE = 9
-WAITING_LINK_LABEL = 10
-WAITING_LINK_COMMENT = 11
+WAITING_LINK_AMOUNT = 5
+WAITING_LINK_REQUISITES = 6
+WAITING_LINK_MANAGER = 7
+WAITING_LINK_LANGUAGE = 8
+WAITING_LINK_LABEL = 9
+WAITING_LINK_COMMENT = 10
 MENU_BUTTONS_PATTERN = (
     r"^(🗺 Выбрать GEO|📊 GEO статус|📊 Активные реквизиты|📝 Реквизиты|🗂 История реквизитов|"
     r"🗑 Удалить реквизит|👤 Менеджер|👥 Права доступа|🔗 Ссылка на оплату|🛠 Админка|ℹ️ Помощь)$"
@@ -109,8 +108,6 @@ MENU_BUTTON_LABELS = {
 MANAGER_KEEP_OPTION = "✅ Оставить текущего"
 MANAGER_ADD_OPTION = "➕ Добавить нового"
 MANAGER_EDIT_OPTION_LEGACY = "✏️ Изменить имя/ссылку"
-MANAGER_CONFIRM_YES = "✅ Да, заменить"
-MANAGER_CONFIRM_NO = "↩️ Нет, оставить текущего"
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
@@ -1962,14 +1959,6 @@ def manager_action_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def manager_confirm_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        [[MANAGER_CONFIRM_YES], [MANAGER_CONFIRM_NO]],
-        resize_keyboard=True,
-        one_time_keyboard=True,
-    )
-
-
 def build_geo_details_text(geo_code: str) -> str:
     profile = get_geo_profile(geo_code)
     requisites = get_active_requisites(geo_code)
@@ -2538,8 +2527,6 @@ async def change_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
         return ConversationHandler.END
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
-    context.user_data.pop("pending_manager_name", None)
-    context.user_data.pop("pending_manager_link", None)
     manager = get_default_manager_for_geo(selected_geo) or {}
     manager_name = manager.get("manager_name") or "не задан"
     manager_link = manager.get("manager_telegram_url") or "не указан"
@@ -2600,22 +2587,6 @@ async def change_manager_save(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
-    current_manager = get_default_manager_for_geo(selected_geo) or {}
-    context.user_data["pending_manager_name"] = lines[0]
-    context.user_data["pending_manager_link"] = lines[1]
-    if current_manager.get("id"):
-        await update.effective_message.reply_text(
-            f"Текущий менеджер GEO {selected_geo}:\n"
-            f"{current_manager.get('manager_name') or 'не задан'}\n"
-            f"{current_manager.get('manager_telegram_url') or 'не указан'}\n\n"
-            "Новый менеджер:\n"
-            f"{lines[0]}\n"
-            f"{lines[1]}\n\n"
-            "Сделать нового менеджера менеджером по умолчанию?",
-            reply_markup=manager_confirm_keyboard(),
-        )
-        return WAITING_MANAGER_CONFIRM
-
     saved_manager = save_geo_manager(
         ManagerPayload(
             manager_id=None,
@@ -2625,8 +2596,6 @@ async def change_manager_save(update: Update, context: ContextTypes.DEFAULT_TYPE
             make_default=True,
         )
     )
-    context.user_data.pop("pending_manager_name", None)
-    context.user_data.pop("pending_manager_link", None)
     log_bot_activity(user_id, "update_manager", geo_code=selected_geo, payload=lines[0])
     await update.effective_message.reply_text(
         f"Новый менеджер для {selected_geo} добавлен и назначен по умолчанию.\n\n"
@@ -2637,52 +2606,64 @@ async def change_manager_save(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 
-async def change_manager_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    choice = (update.effective_message.text or "").strip()
-    user_id = update.effective_user.id if update.effective_user else None
-    selected_geo = get_selected_geo(context, user_id)
-    pending_name = (context.user_data.get("pending_manager_name") or "").strip()
-    pending_link = (context.user_data.get("pending_manager_link") or "").strip()
-
-    if choice == MANAGER_CONFIRM_NO:
-        context.user_data.pop("pending_manager_name", None)
-        context.user_data.pop("pending_manager_link", None)
+async def send_ready_payment_link(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    amount: float,
+    user_id: int | None,
+    selected_geo: str,
+    requisites_id: int | None = None,
+    manager_id: int | None = None,
+    manager_link: str | None = None,
+    forced_language: str | None = None,
+    clean_label: str = "",
+    clean_comment: str = "",
+) -> int:
+    safe_manager_link = normalize_manager_link(manager_link)
+    try:
+        link = build_payment_link(
+            amount,
+            selected_geo,
+            clean_label,
+            clean_comment,
+            forced_language=forced_language,
+            requisites_id=requisites_id,
+            manager_id=manager_id,
+            manager_link_override=safe_manager_link,
+        )
+    except HTTPException as exc:
         await update.effective_message.reply_text(
-            f"Текущий менеджер для {selected_geo} оставлен без изменений.",
+            str(exc.detail),
             reply_markup=main_keyboard(get_bot_user_role(user_id)),
         )
         return ConversationHandler.END
 
-    if choice != MANAGER_CONFIRM_YES:
-        await update.effective_message.reply_text(
-            "Выберите вариант кнопкой ниже: заменить текущего менеджера или оставить его.",
-            reply_markup=manager_confirm_keyboard(),
-        )
-        return WAITING_MANAGER_CONFIRM
+    manager = resolve_manager_for_geo(selected_geo, manager_id)
+    if safe_manager_link:
+        manager = {
+            **manager,
+            "manager_name": manager.get("manager_name") or "персональный контакт",
+            "manager_telegram_url": safe_manager_link,
+        }
 
-    if not pending_name or not pending_link:
-        await update.effective_message.reply_text(
-            "Данные нового менеджера потерялись. Нажмите `👤 Менеджер` и повторите ввод.",
-            reply_markup=main_keyboard(get_bot_user_role(user_id)),
-        )
-        return ConversationHandler.END
+    context.user_data.pop("temp_amount", None)
+    context.user_data.pop("temp_requisites_id", None)
+    context.user_data.pop("temp_manager_id", None)
+    context.user_data.pop("temp_manager_link", None)
+    context.user_data.pop("temp_language", None)
+    context.user_data.pop("temp_label", None)
 
-    saved_manager = save_geo_manager(
-        ManagerPayload(
-            manager_id=None,
-            geo_code=selected_geo,
-            manager_name=pending_name,
-            manager_telegram_url=pending_link,
-            make_default=True,
-        )
-    )
-    context.user_data.pop("pending_manager_name", None)
-    context.user_data.pop("pending_manager_link", None)
-    log_bot_activity(user_id, "update_manager", geo_code=selected_geo, payload=pending_name)
+    log_bot_activity(user_id, "create_link", geo_code=selected_geo, payload=f"{amount:.2f}")
     await update.effective_message.reply_text(
-        f"Новый менеджер для {selected_geo} добавлен и назначен по умолчанию.\n\n"
-        f"ID: {saved_manager.get('id')}\n"
-        f"{build_geo_details_text(selected_geo)}",
+        f"Ссылка готова.\n\n"
+        f"GEO: {selected_geo}\n"
+        f"Сумма: {amount:.2f} {DEFAULT_CURRENCY}\n"
+        f"Реквизиты: {requisites_id or 'latest'}\n"
+        f"Менеджер: {manager.get('manager_name') or 'default'}\n"
+        f"Назначение: {clean_label or 'не указано'}\n"
+        f"Комментарий: {clean_comment or 'не указан'}\n"
+        f"Язык: {forced_language or 'auto'}\n"
+        f"Ссылка: {link}",
         reply_markup=main_keyboard(get_bot_user_role(user_id)),
     )
     return ConversationHandler.END
@@ -2717,10 +2698,31 @@ async def create_link_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
     active_requisites = get_active_requisites(selected_geo)
     active_requisites_id = active_requisites.get("id")
     context.user_data["temp_requisites_id"] = active_requisites_id if active_requisites_id else None
+    default_manager = get_default_manager_for_geo(selected_geo) or {}
+    default_manager_id = default_manager.get("id") if default_manager.get("id") else None
+    default_manager_link = normalize_manager_link(default_manager.get("manager_telegram_url"))
+    if default_manager_link:
+        context.user_data["temp_manager_id"] = default_manager_id
+        context.user_data["temp_manager_link"] = ""
+        return await send_ready_payment_link(
+            update,
+            context,
+            amount=amount,
+            user_id=user_id,
+            selected_geo=selected_geo,
+            requisites_id=active_requisites_id if active_requisites_id else None,
+            manager_id=default_manager_id,
+            manager_link="",
+            forced_language=None,
+            clean_label="",
+            clean_comment="",
+        )
+
     await update.effective_message.reply_text(
         f"Использую активные реквизиты GEO {selected_geo}: "
         f"ID {active_requisites_id if active_requisites_id else 'latest'}.\n"
-        "Если нужно выбрать другой ID, сначала активируйте его в `🗂 История реквизитов`.\n\n"
+        "Если нужно выбрать другой ID, сначала активируйте его в `🗂 История реквизитов`.\n"
+        "Менеджер для этого GEO не заполнен, поэтому нужно выбрать его вручную.\n\n"
         f"{build_link_manager_selection_text(selected_geo)}"
     )
     return WAITING_LINK_MANAGER
@@ -2811,50 +2813,19 @@ async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE
     clean_label = str(context.user_data.get("temp_label", ""))
     comment = update.effective_message.text.strip()
     clean_comment = "" if comment == "-" else clean_payment_comment(comment)
-    try:
-        link = build_payment_link(
-            amount,
-            selected_geo,
-            clean_label,
-            clean_comment,
-            forced_language=forced_language,
-            requisites_id=requisites_id,
-            manager_id=manager_id,
-            manager_link_override=manager_link,
-        )
-    except HTTPException as exc:
-        await update.effective_message.reply_text(
-            str(exc.detail),
-            reply_markup=main_keyboard(get_bot_user_role(user_id)),
-        )
-        return ConversationHandler.END
-    manager = resolve_manager_for_geo(selected_geo, manager_id)
-    if manager_link:
-        manager = {
-            **manager,
-            "manager_name": manager.get("manager_name") or "персональный контакт",
-            "manager_telegram_url": manager_link,
-        }
-    context.user_data.pop("temp_amount", None)
-    context.user_data.pop("temp_requisites_id", None)
-    context.user_data.pop("temp_manager_id", None)
-    context.user_data.pop("temp_manager_link", None)
-    context.user_data.pop("temp_language", None)
-    context.user_data.pop("temp_label", None)
-    log_bot_activity(user_id, "create_link", geo_code=selected_geo, payload=f"{amount:.2f}")
-    await update.effective_message.reply_text(
-        f"Ссылка готова.\n\n"
-        f"GEO: {selected_geo}\n"
-        f"Сумма: {amount:.2f} {DEFAULT_CURRENCY}\n"
-        f"Реквизиты: {requisites_id or 'latest'}\n"
-        f"Менеджер: {manager.get('manager_name') or 'default'}\n"
-        f"Назначение: {clean_label or 'не указано'}\n"
-        f"Комментарий: {clean_comment or 'не указан'}\n"
-        f"Язык: {forced_language or 'auto'}\n"
-        f"Ссылка: {link}",
-        reply_markup=main_keyboard(get_bot_user_role(user_id)),
+    return await send_ready_payment_link(
+        update,
+        context,
+        amount=amount,
+        user_id=user_id,
+        selected_geo=selected_geo,
+        requisites_id=requisites_id,
+        manager_id=manager_id,
+        manager_link=manager_link,
+        forced_language=forced_language,
+        clean_label=clean_label,
+        clean_comment=clean_comment,
     )
-    return ConversationHandler.END
 
 
 async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -2889,7 +2860,6 @@ if bot_app is not None:
         states={
             WAITING_MANAGER_ACTION: [MessageHandler(conversation_text_filter, change_manager_action)],
             WAITING_MANAGER: [MessageHandler(conversation_text_filter, change_manager_save)],
-            WAITING_MANAGER_CONFIRM: [MessageHandler(conversation_text_filter, change_manager_confirm)],
         },
         fallbacks=[
             CommandHandler("cancel", cancel_cmd),
