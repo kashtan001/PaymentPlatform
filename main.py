@@ -91,6 +91,19 @@ MENU_BUTTONS_PATTERN = (
     r"^(🗺 Выбрать GEO|📊 GEO статус|📊 Активные реквизиты|📝 Реквизиты|🗂 История реквизитов|"
     r"🗑 Удалить реквизит|👤 Менеджер|👥 Права доступа|🔗 Ссылка на оплату|🛠 Админка|ℹ️ Помощь)$"
 )
+MENU_BUTTON_LABELS = {
+    "🗺 Выбрать GEO",
+    "📊 GEO статус",
+    "📊 Активные реквизиты",
+    "📝 Реквизиты",
+    "🗂 История реквизитов",
+    "🗑 Удалить реквизит",
+    "👤 Менеджер",
+    "👥 Права доступа",
+    "🔗 Ссылка на оплату",
+    "🛠 Админка",
+    "ℹ️ Помощь",
+}
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
@@ -335,6 +348,10 @@ def has_manager_contact(geo_code: str, manager_id: int | None = None) -> bool:
 def clean_payment_comment(raw_value: str | None) -> str:
     value = re.sub(r"\s+", " ", (raw_value or "").strip())
     return value[:300]
+
+
+def is_menu_button_text(text: str | None) -> bool:
+    return (text or "").strip() in MENU_BUTTON_LABELS
 
 
 def parse_payment_amount(raw_value: str | None) -> float | None:
@@ -2336,6 +2353,14 @@ async def change_reqs_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def change_reqs_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    incoming_text = update.effective_message.text
+    if is_menu_button_text(incoming_text):
+        await update.effective_message.reply_text(
+            "Текущий ввод реквизитов отменен. Нажмите нужную кнопку еще раз.",
+            reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
+        )
+        return ConversationHandler.END
+
     lines = [line.strip() for line in update.effective_message.text.strip().splitlines() if line.strip()]
     if len(lines) < 4:
         await update.effective_message.reply_text("Нужно 4 строки: банк, IBAN, BIC / SWIFT и получатель.")
