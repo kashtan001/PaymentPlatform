@@ -80,13 +80,14 @@ CLIENT_NAME_MAX_LENGTH = 80
 BOT_ENABLED = bool(BOT_TOKEN)
 WAITING_GEO_SELECTION = 1
 WAITING_REQUISITES = 2
-WAITING_MANAGER = 3
-WAITING_LINK_AMOUNT = 4
-WAITING_LINK_REQUISITES = 5
-WAITING_LINK_MANAGER = 6
-WAITING_LINK_LANGUAGE = 7
-WAITING_LINK_LABEL = 8
-WAITING_LINK_COMMENT = 9
+WAITING_MANAGER_ACTION = 3
+WAITING_MANAGER = 4
+WAITING_LINK_AMOUNT = 5
+WAITING_LINK_REQUISITES = 6
+WAITING_LINK_MANAGER = 7
+WAITING_LINK_LANGUAGE = 8
+WAITING_LINK_LABEL = 9
+WAITING_LINK_COMMENT = 10
 MENU_BUTTONS_PATTERN = (
     r"^(🗺 Выбрать GEO|📊 GEO статус|📊 Активные реквизиты|📝 Реквизиты|🗂 История реквизитов|"
     r"🗑 Удалить реквизит|👤 Менеджер|👥 Права доступа|🔗 Ссылка на оплату|🛠 Админка|ℹ️ Помощь)$"
@@ -104,6 +105,8 @@ MENU_BUTTON_LABELS = {
     "🛠 Админка",
     "ℹ️ Помощь",
 }
+MANAGER_KEEP_OPTION = "✅ Оставить текущие настройки"
+MANAGER_EDIT_OPTION = "✏️ Изменить имя/ссылку"
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
@@ -1947,6 +1950,14 @@ def geo_picker_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([["ES", "IT"], ["DE", "FR"]], resize_keyboard=True, one_time_keyboard=True)
 
 
+def manager_action_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [[MANAGER_KEEP_OPTION], [MANAGER_EDIT_OPTION]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
 def build_geo_details_text(geo_code: str) -> str:
     profile = get_geo_profile(geo_code)
     requisites = get_active_requisites(geo_code)
@@ -2516,15 +2527,55 @@ async def change_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
     manager = get_default_manager_for_geo(selected_geo) or {}
+    manager_name = manager.get("manager_name") or "не задан"
+    manager_link = manager.get("manager_telegram_url") or "не указан"
+    if manager.get("id"):
+        await update.effective_message.reply_text(
+            f"Текущий GEO: {selected_geo}\n"
+            f"Менеджер по умолчанию: {manager_name}\n"
+            f"Telegram: {manager_link}\n\n"
+            "Что сделать с менеджером?",
+            reply_markup=manager_action_keyboard(),
+        )
+        return WAITING_MANAGER_ACTION
+
     await update.effective_message.reply_text(
         f"Текущий GEO: {selected_geo}\n"
-        f"Менеджер по умолчанию: {manager.get('manager_name') or 'не задан'}\n"
-        f"Telegram: {manager.get('manager_telegram_url') or 'не указан'}\n\n"
+        f"Менеджер по умолчанию: {manager_name}\n"
+        f"Telegram: {manager_link}\n\n"
         "Отправьте две строки:\n"
         "Имя менеджера\n"
-        "Telegram-ссылка менеджера"
+        "Telegram-ссылка менеджера",
+        reply_markup=main_keyboard(get_bot_user_role(user_id)),
     )
     return WAITING_MANAGER
+
+
+async def change_manager_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    choice = (update.effective_message.text or "").strip()
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
+    if choice == MANAGER_KEEP_OPTION:
+        await update.effective_message.reply_text(
+            f"Настройки менеджера для {selected_geo} оставлены без изменений.",
+            reply_markup=main_keyboard(get_bot_user_role(user_id)),
+        )
+        return ConversationHandler.END
+    if choice == MANAGER_EDIT_OPTION:
+        await update.effective_message.reply_text(
+            f"Текущий GEO: {selected_geo}\n"
+            "Отправьте две строки:\n"
+            "Имя менеджера\n"
+            "Telegram-ссылка менеджера",
+            reply_markup=main_keyboard(get_bot_user_role(user_id)),
+        )
+        return WAITING_MANAGER
+
+    await update.effective_message.reply_text(
+        "Выберите вариант кнопкой ниже: оставить текущие настройки или изменить имя/ссылку.",
+        reply_markup=manager_action_keyboard(),
+    )
+    return WAITING_MANAGER_ACTION
 
 
 async def change_manager_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -2572,8 +2623,16 @@ async def create_link_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
     context.user_data["temp_amount"] = amount
-    await update.effective_message.reply_text(build_link_requisites_selection_text(selected_geo))
-    return WAITING_LINK_REQUISITES
+    active_requisites = get_active_requisites(selected_geo)
+    active_requisites_id = active_requisites.get("id")
+    context.user_data["temp_requisites_id"] = active_requisites_id if active_requisites_id else None
+    await update.effective_message.reply_text(
+        f"Использую активные реквизиты GEO {selected_geo}: "
+        f"ID {active_requisites_id if active_requisites_id else 'latest'}.\n"
+        "Если нужно выбрать другой ID, сначала активируйте его в `🗂 История реквизитов`.\n\n"
+        f"{build_link_manager_selection_text(selected_geo)}"
+    )
+    return WAITING_LINK_MANAGER
 
 
 async def create_link_requisites(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -2736,7 +2795,10 @@ if bot_app is not None:
     )
     conv_handler_manager = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^👤 Менеджер$"), change_manager_start)],
-        states={WAITING_MANAGER: [MessageHandler(conversation_text_filter, change_manager_save)]},
+        states={
+            WAITING_MANAGER_ACTION: [MessageHandler(conversation_text_filter, change_manager_action)],
+            WAITING_MANAGER: [MessageHandler(conversation_text_filter, change_manager_save)],
+        },
         fallbacks=[
             CommandHandler("cancel", cancel_cmd),
             MessageHandler(filters.Regex(MENU_BUTTONS_PATTERN), cancel_cmd),
