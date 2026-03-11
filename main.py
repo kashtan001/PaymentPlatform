@@ -1085,8 +1085,9 @@ def init_db() -> None:
     web_admin_columns = {row["name"] for row in conn.execute("PRAGMA table_info(web_admin_users)")}
     if "username" in web_admin_columns and "login" in web_admin_columns:
         conn.execute(
-            "UPDATE web_admin_users SET login = username WHERE (login IS NULL OR login = '') AND username IS NOT NULL"
+            "UPDATE web_admin_users SET login = username WHERE (login IS NULL OR TRIM(COALESCE(login, '')) = '') AND username IS NOT NULL AND TRIM(username) != ''"
         )
+        conn.commit()
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_web_admin_users_login
@@ -1741,10 +1742,16 @@ def get_web_admin_by_login(login_value: str) -> dict[str, Any] | None:
         return None
     try:
         conn = get_connection()
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(web_admin_users)")}
         row = conn.execute(
-            "SELECT id, login, password_hash, role, created_at FROM web_admin_users WHERE login IS NOT NULL AND LOWER(login) = ? LIMIT 1",
+            "SELECT id, login, password_hash, role, created_at FROM web_admin_users WHERE login IS NOT NULL AND LOWER(TRIM(login)) = ? LIMIT 1",
             (raw_value,),
         ).fetchone()
+        if row is None and "username" in columns:
+            row = conn.execute(
+                "SELECT id, COALESCE(login, username) as login, password_hash, role, created_at FROM web_admin_users WHERE username IS NOT NULL AND LOWER(TRIM(username)) = ? LIMIT 1",
+                (raw_value,),
+            ).fetchone()
         conn.close()
         return dict(row) if row else None
     except (sqlite3.OperationalError, sqlite3.ProgrammingError):
@@ -1784,9 +1791,17 @@ def create_web_admin_user(login: str, password: str, role: str) -> dict[str, Any
 def list_web_admin_users() -> list[dict[str, Any]]:
     try:
         conn = get_connection()
-        rows = conn.execute(
-            "SELECT id, login, role, created_at FROM web_admin_users WHERE login IS NOT NULL AND login != '' ORDER BY login ASC"
-        ).fetchall()
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(web_admin_users)")}
+        if "username" in columns:
+            rows = conn.execute(
+                """SELECT id, COALESCE(NULLIF(TRIM(login), ''), username) as login, role, created_at
+                   FROM web_admin_users WHERE COALESCE(NULLIF(TRIM(login), ''), username) IS NOT NULL AND COALESCE(NULLIF(TRIM(login), ''), username) != ''
+                   ORDER BY login ASC"""
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, login, role, created_at FROM web_admin_users WHERE login IS NOT NULL AND TRIM(login) != '' ORDER BY login ASC"
+            ).fetchall()
         conn.close()
         result = []
         for row in rows:
