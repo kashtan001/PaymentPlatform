@@ -1761,8 +1761,12 @@ def parse_iso_datetime(raw_value: str | None) -> datetime | None:
         return None
 
 
-def build_payment_link_url(link_token: str) -> str:
-    return f"{WEB_URL}/?link={link_token}"
+def build_payment_link_url(link_token: str, forced_language: str | None = None) -> str:
+    params: dict[str, str] = {"link": link_token}
+    safe_lang = sanitize_language_code(forced_language)
+    if safe_lang:
+        params["lang"] = safe_lang
+    return f"{WEB_URL}/?{urlencode(params)}"
 
 
 def expire_payment_link_if_needed(record: dict[str, Any], conn: sqlite3.Connection | None = None) -> dict[str, Any]:
@@ -2882,10 +2886,8 @@ def build_link_manager_selection_text(geo_code: str) -> str:
         "На лендинг попадет именно эта Telegram-ссылка.",
     ]
     for item in items:
-        channel_suffix = f" | канал: {item['channel_name']}" if item.get("channel_name") else ""
-        lines.append(
-            f"{item['manager_name']} | @{item['username']}{channel_suffix}"
-        )
+        channel_name = (item.get("channel_name") or "").strip() or "Pay"
+        lines.append(f"@{item['username']} — {channel_name}")
     if not items:
         lines.append("")
         lines.append("Нет ни одного обработчика с username. Администратор должен назначить роль handler и пользователь должен зайти в бота хотя бы один раз.")
@@ -3456,7 +3458,10 @@ async def send_ready_payment_link(
             forced_language=forced_language,
             handler_user_id=manager_id,
         )
-        link = build_payment_link_url(str(link_record.get("link_token") or ""))
+        link = build_payment_link_url(
+            str(link_record.get("link_token") or ""),
+            forced_language=forced_language,
+        )
     except HTTPException as exc:
         await update.effective_message.reply_text(
             str(exc.detail),
@@ -4008,7 +4013,10 @@ async def admin_create_payment_link(payload: CreatePaymentLinkPayload, request: 
     )
     return {
         "ok": True,
-        "link": build_payment_link_url(str(link_record.get("link_token") or "")),
+        "link": build_payment_link_url(
+            str(link_record.get("link_token") or ""),
+            forced_language=link_record.get("forced_language"),
+        ),
         "payment_link": link_record,
     }
 

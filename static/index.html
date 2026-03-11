@@ -150,7 +150,7 @@
                         <span x-text="channelInitial()"></span>
                     </template>
                 </div>
-                <p class="text-sm font-semibold text-slate-900 text-center" x-text="channelDisplayName()"></p>
+                <p class="text-sm font-semibold text-black text-center" x-text="channelDisplayName()"></p>
             </div>
 
             <button type="button" @click="showLanguages = true" class="surface rounded-full px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
@@ -713,6 +713,9 @@
                 changeLanguage(languageCode) {
                     this.applyLanguage(languageCode);
                     this.showLanguages = false;
+                    const url = new URL(window.location.href);
+                    url.searchParams.set("lang", languageCode);
+                    window.history.replaceState({}, "", url.toString());
                 },
 
                 resolvedInvalidTitle() {

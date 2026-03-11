@@ -435,7 +435,7 @@
                             </label>
                             <label class="block">
                                 <span class="mb-2 block text-sm text-zinc-400">Обработчик для ссылки</span>
-                                <select x-model="linkForm.handler_user_id" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                <select x-model="linkForm.handler_user_id" class="input-shell w-full rounded-2xl px-4 py-4 outline-none text-center font-semibold text-black">
                                     <option value="">Выберите обработчика</option>
                                     <template x-for="item in handlers()" :key="item.user_id">
                                         <option :value="String(item.user_id)" x-text="handlerOptionLabel(item)"></option>
@@ -1178,12 +1178,8 @@
                 },
 
                 handlerOptionLabel(item) {
-                    const parts = [
-                        item.full_name || item.username || `ID ${item.user_id}`,
-                        item.username ? `@${item.username}` : "",
-                        item.channel_name ? `канал: ${item.channel_name}` : "",
-                    ].filter(Boolean);
-                    return parts.join(" | ");
+                    const name = String(item.channel_name || "").trim();
+                    return name || "Pay";
                 },
 
                 getChannelById(channelId) {
