@@ -611,65 +611,6 @@
                 </div>
             </section>
 
-            <section x-show="isAdmin()" x-cloak class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
-                <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Доступы веб-админки</p>
-                <div class="mt-2 panel-title">
-                    <h2 class="text-xl font-semibold">Пользователи веб-админки</h2>
-                    <div class="info-trigger">
-                        <button type="button" class="info-button" aria-label="Описание блока пользователей веб-админки">i</button>
-                        <div class="info-text">
-                            Создайте логин и пароль для обработчиков и процессоров. Они смогут входить в веб-панель под своими учётными данными с ограниченными правами по роли.
-                        </div>
-                    </div>
-                </div>
-
-                <form class="mt-5 space-y-4" @submit.prevent="saveWebUser">
-                    <div class="grid gap-4 sm:grid-cols-3">
-                        <label class="block">
-                            <span class="mb-2 block text-sm text-zinc-400">Логин</span>
-                            <input type="text" x-model="webUserForm.login" class="input-shell w-full rounded-2xl px-4 py-4 outline-none" placeholder="processor1">
-                        </label>
-                        <label class="block">
-                            <span class="mb-2 block text-sm text-zinc-400">Пароль</span>
-                            <input type="password" x-model="webUserForm.password" class="input-shell w-full rounded-2xl px-4 py-4 outline-none" placeholder="••••••••">
-                        </label>
-                        <label class="block">
-                            <span class="mb-2 block text-sm text-zinc-400">Роль</span>
-                            <select x-model="webUserForm.role" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
-                                <template x-for="role in webRoleOptions()" :key="role.code">
-                                    <option :value="role.code" x-text="role.label"></option>
-                                </template>
-                            </select>
-                        </label>
-                    </div>
-
-                    <div x-show="webUserMessage" x-cloak class="rounded-2xl bg-white/5 px-4 py-4 text-sm text-zinc-300" x-text="webUserMessage"></div>
-
-                    <div class="flex flex-wrap gap-2">
-                        <button type="submit" class="rounded-full bg-white px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-black">Создать пользователя</button>
-                        <button type="button" @click="resetWebUserForm()" class="rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Очистить</button>
-                    </div>
-                </form>
-
-                <div class="mt-5 space-y-3">
-                    <template x-for="item in webUsers()" :key="item.id">
-                        <div class="rounded-[1.4rem] bg-white/5 p-4">
-                            <div class="flex flex-wrap items-center justify-between gap-3">
-                                <div>
-                                    <div class="text-sm font-semibold" x-text="item.login"></div>
-                                    <div class="mt-1 text-xs text-zinc-500" x-text="`ID: ${item.id}`"></div>
-                                    <div class="mt-1 text-xs text-zinc-400" x-text="`Создан: ${formatDate(item.created_at)}`"></div>
-                                </div>
-                                <div class="flex flex-wrap gap-2">
-                                    <span class="rounded-full bg-white/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200" x-text="item.role_label || formatRoleLabel(item.role)"></span>
-                                    <button type="button" @click="deleteWebUser(item.id)" class="rounded-full border border-red-500/30 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-red-300">Удалить</button>
-                                </div>
-                            </div>
-                        </div>
-                    </template>
-                </div>
-            </section>
-
             <details x-show="isAdmin()" x-cloak class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
                 <summary class="cursor-pointer list-none text-lg font-semibold">
                     Дополнительно
@@ -1116,12 +1057,6 @@
                     role: "handler",
                     channel_id: ""
                 },
-                webUserMessage: "",
-                webUserForm: {
-                    login: "",
-                    password: "",
-                    role: "processor"
-                },
 
                 async init() {
                     await this.checkSession();
@@ -1190,17 +1125,6 @@
 
                 channels() {
                     return this.dashboard.channels || [];
-                },
-
-                webUsers() {
-                    return this.dashboard.web_users || [];
-                },
-
-                webRoleOptions() {
-                    return this.dashboard.web_role_options || [
-                        { code: "handler", label: "Обработчик" },
-                        { code: "processor", label: "Процессор" }
-                    ];
                 },
 
                 currentGeoSnapshot() {
@@ -1716,71 +1640,6 @@
                         await this.refreshDashboard();
                     } catch (error) {
                         this.botUserMessage = error.message || "Не удалось удалить пользователя";
-                    }
-                },
-
-                resetWebUserForm() {
-                    this.webUserForm.login = "";
-                    this.webUserForm.password = "";
-                    this.webUserForm.role = "processor";
-                    this.webUserMessage = "";
-                },
-
-                async saveWebUser() {
-                    const login = (this.webUserForm.login || "").trim();
-                    const password = this.webUserForm.password || "";
-                    if (!login || login.length < 2) {
-                        this.webUserMessage = "Логин должен содержать минимум 2 символа";
-                        return;
-                    }
-                    if (!password || password.length < 6) {
-                        this.webUserMessage = "Пароль должен содержать минимум 6 символов";
-                        return;
-                    }
-                    try {
-                        const response = await fetch(this.apiUrl("/api/admin/web-users"), {
-                            method: "POST",
-                            credentials: "include",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                login,
-                                password,
-                                role: this.webUserForm.role
-                            })
-                        });
-                        const data = await response.json().catch(() => ({}));
-                        if (!response.ok) {
-                            throw new Error(data.detail || "Не удалось создать пользователя");
-                        }
-                        this.webUserMessage = `Пользователь ${login} создан`;
-                        this.resetWebUserForm();
-                        await this.refreshDashboard();
-                    } catch (error) {
-                        this.webUserMessage = error.message || "Не удалось создать пользователя";
-                    }
-                },
-
-                async deleteWebUser(userId) {
-                    if (!userId) {
-                        return;
-                    }
-                    const shouldDelete = window.confirm("Удалить этого пользователя веб-админки? Он больше не сможет войти.");
-                    if (!shouldDelete) {
-                        return;
-                    }
-                    try {
-                        const response = await fetch(this.apiUrl(`/api/admin/web-users/${userId}`), {
-                            method: "DELETE",
-                            credentials: "include"
-                        });
-                        const data = await response.json().catch(() => ({}));
-                        if (!response.ok) {
-                            throw new Error(data.detail || "Не удалось удалить пользователя");
-                        }
-                        this.webUserMessage = data.message || "Пользователь удалён";
-                        await this.refreshDashboard();
-                    } catch (error) {
-                        this.webUserMessage = error.message || "Не удалось удалить пользователя";
                     }
                 },
 
