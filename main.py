@@ -1762,10 +1762,10 @@ def parse_iso_datetime(raw_value: str | None) -> datetime | None:
 
 
 def build_payment_link_url(link_token: str, forced_language: str | None = None) -> str:
-    params: dict[str, str] = {"link": link_token}
-    safe_lang = sanitize_language_code(forced_language)
-    if safe_lang:
-        params["lang"] = safe_lang
+    params = {"link": str(link_token or "")}
+    safe_language = sanitize_language_code(forced_language)
+    if safe_language:
+        params["lang"] = safe_language
     return f"{WEB_URL}/?{urlencode(params)}"
 
 
@@ -2886,8 +2886,10 @@ def build_link_manager_selection_text(geo_code: str) -> str:
         "На лендинг попадет именно эта Telegram-ссылка.",
     ]
     for item in items:
-        channel_name = (item.get("channel_name") or "").strip() or "Pay"
-        lines.append(f"@{item['username']} — {channel_name}")
+        channel_suffix = f" | канал: {item['channel_name']}" if item.get("channel_name") else ""
+        lines.append(
+            f"{item['manager_name']} | @{item['username']}{channel_suffix}"
+        )
     if not items:
         lines.append("")
         lines.append("Нет ни одного обработчика с username. Администратор должен назначить роль handler и пользователь должен зайти в бота хотя бы один раз.")
@@ -3460,7 +3462,7 @@ async def send_ready_payment_link(
         )
         link = build_payment_link_url(
             str(link_record.get("link_token") or ""),
-            forced_language=forced_language,
+            link_record.get("forced_language"),
         )
     except HTTPException as exc:
         await update.effective_message.reply_text(
@@ -4015,7 +4017,7 @@ async def admin_create_payment_link(payload: CreatePaymentLinkPayload, request: 
         "ok": True,
         "link": build_payment_link_url(
             str(link_record.get("link_token") or ""),
-            forced_language=link_record.get("forced_language"),
+            link_record.get("forced_language"),
         ),
         "payment_link": link_record,
     }

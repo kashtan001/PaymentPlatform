@@ -140,20 +140,13 @@
 </head>
 <body x-data="landingApp()" x-init="init()">
     <div class="mx-auto min-h-screen max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
-        <header class="mb-6 flex items-center justify-between gap-3">
-            <div class="surface flex items-center justify-center gap-3 rounded-full px-3 py-2 shadow-soft">
-                <div class="brand-logo flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-sm font-semibold text-white">
-                    <template x-if="hasChannelLogo()">
-                        <img :src="channelLogoUrl()" :alt="channelDisplayName()" class="h-full w-full object-cover">
-                    </template>
-                    <template x-if="!hasChannelLogo()">
-                        <span x-text="channelInitial()"></span>
-                    </template>
-                </div>
-                <p class="text-sm font-semibold text-black text-center" x-text="channelDisplayName()"></p>
+        <header class="mb-6 grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+            <div></div>
+            <div class="surface rounded-full px-5 py-3 shadow-soft">
+                <p class="max-w-[60vw] truncate text-center text-sm font-semibold text-slate-900 sm:max-w-[24rem]" x-text="channelDisplayName()"></p>
             </div>
 
-            <button type="button" @click="showLanguages = true" class="surface rounded-full px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
+            <button type="button" @click="showLanguages = true" class="surface justify-self-end rounded-full px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
                 <span x-text="languageLabel(currentLang)"></span>
             </button>
         </header>
@@ -713,9 +706,6 @@
                 changeLanguage(languageCode) {
                     this.applyLanguage(languageCode);
                     this.showLanguages = false;
-                    const url = new URL(window.location.href);
-                    url.searchParams.set("lang", languageCode);
-                    window.history.replaceState({}, "", url.toString());
                 },
 
                 resolvedInvalidTitle() {
@@ -750,8 +740,18 @@
                 },
 
                 channelDisplayName() {
-                    const name = String(this.manager.channel_name || "").trim();
-                    return name || "Pay";
+                    const rawName = String(this.manager.channel_name || "").trim();
+                    if (!rawName) {
+                        return "Pay";
+                    }
+                    const parts = rawName
+                        .split(/\r?\n/u)
+                        .map((part) => part.trim())
+                        .filter(Boolean);
+                    const candidate = String(parts.find((part) => /[^\d\s]/u.test(part)) || parts[parts.length - 1] || rawName)
+                        .replace(/^\d{5,}\s*/u, "")
+                        .trim();
+                    return candidate || "Pay";
                 },
 
                 channelInitial() {
