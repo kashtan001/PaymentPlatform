@@ -1871,8 +1871,11 @@ def parse_iso_datetime(raw_value: str | None) -> datetime | None:
         return None
 
 
-def build_payment_link_url(link_token: str) -> str:
-    return f"{WEB_URL}/?link={link_token}"
+def build_payment_link_url(link_token: str, lang: str | None = None) -> str:
+    base = f"{WEB_URL}/?link={link_token}"
+    if lang and sanitize_language_code(lang):
+        return f"{base}&lang={sanitize_language_code(lang)}"
+    return base
 
 
 def expire_payment_link_if_needed(record: dict[str, Any], conn: sqlite3.Connection | None = None) -> dict[str, Any]:
@@ -3583,7 +3586,10 @@ async def send_ready_payment_link(
             forced_language=forced_language,
             handler_user_id=manager_id,
         )
-        link = build_payment_link_url(str(link_record.get("link_token") or ""))
+        link = build_payment_link_url(
+            str(link_record.get("link_token") or ""),
+            lang=forced_language,
+        )
     except HTTPException as exc:
         await update.effective_message.reply_text(
             str(exc.detail),
@@ -4138,7 +4144,10 @@ async def admin_create_payment_link(payload: CreatePaymentLinkPayload, request: 
     )
     return {
         "ok": True,
-        "link": build_payment_link_url(str(link_record.get("link_token") or "")),
+        "link": build_payment_link_url(
+            str(link_record.get("link_token") or ""),
+            lang=payload.language_code if payload.language_code and payload.language_code != "auto" else None,
+        ),
         "payment_link": link_record,
     }
 

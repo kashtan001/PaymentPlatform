@@ -525,26 +525,24 @@
 
                     <div class="mt-5 space-y-3">
                         <template x-for="item in channels()" :key="item.id">
-                            <div class="rounded-[1.4rem] bg-black/10 p-4">
+                            <div class="rounded-[1.4rem] bg-white/95 p-4 shadow-sm">
                                 <div class="flex flex-wrap items-center justify-between gap-3">
-                                    <div class="flex items-center gap-4">
-                                        <div class="channel-logo flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10">
+                                    <div class="flex flex-1 items-center justify-center gap-4">
+                                        <div class="channel-logo flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-slate-100">
                                             <template x-if="item.logo_url">
                                                 <img :src="item.logo_url" :alt="item.channel_name" class="h-full w-full object-cover">
                                             </template>
                                             <template x-if="!item.logo_url">
-                                                <span class="text-lg font-semibold text-zinc-300" x-text="item.channel_name.charAt(0).toUpperCase()"></span>
+                                                <span class="text-lg font-semibold text-slate-500" x-text="item.channel_name.charAt(0).toUpperCase()"></span>
                                             </template>
                                         </div>
-                                        <div>
-                                            <div class="text-sm font-semibold text-white" x-text="item.channel_name"></div>
-                                            <div class="mt-1 text-xs text-zinc-500" x-text="`ID: ${item.id}`"></div>
-                                            <div class="mt-1 text-xs text-zinc-400" x-text="`Обработчиков привязано: ${item.handler_count || 0}`"></div>
+                                        <div class="flex flex-1 items-center justify-center">
+                                            <div class="text-center text-base font-semibold text-black" x-text="item.channel_name"></div>
                                         </div>
                                     </div>
                                     <div class="flex flex-wrap gap-2">
-                                        <button type="button" @click="editChannel(item)" class="rounded-full border border-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white">Изменить</button>
-                                        <button type="button" @click="deleteChannel(item)" class="rounded-full border border-red-500/30 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-red-300">Удалить</button>
+                                        <button type="button" @click="editChannel(item)" class="rounded-full border border-slate-300 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-700">Изменить</button>
+                                        <button type="button" @click="deleteChannel(item)" class="rounded-full border border-red-400 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-red-600">Удалить</button>
                                     </div>
                                 </div>
                             </div>
@@ -611,10 +609,10 @@
                 </div>
             </section>
 
-            <section x-show="isAdmin()" x-cloak class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
-                <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Доступы веб-админки</p>
+            <section x-show="isAdmin()" x-cloak class="panel rounded-[2rem] border border-emerald-400/20 p-5 shadow-panel sm:p-6">
+                <p class="text-xs uppercase tracking-[0.3em] text-emerald-400/80">Доступы веб-админки</p>
                 <div class="mt-2 panel-title">
-                    <h2 class="text-xl font-semibold">Пользователи веб-админки</h2>
+                    <h2 class="text-xl font-semibold">Логин и пароль для обработчиков и процессоров</h2>
                     <div class="info-trigger">
                         <button type="button" class="info-button" aria-label="Описание блока пользователей веб-админки">i</button>
                         <div class="info-text">
@@ -1254,12 +1252,7 @@
                 },
 
                 handlerOptionLabel(item) {
-                    const parts = [
-                        item.full_name || item.username || `ID ${item.user_id}`,
-                        item.username ? `@${item.username}` : "",
-                        item.channel_name ? `канал: ${item.channel_name}` : "",
-                    ].filter(Boolean);
-                    return parts.join(" | ");
+                    return (item.channel_name || item.full_name || item.username || `ID ${item.user_id}`).trim();
                 },
 
                 getChannelById(channelId) {
