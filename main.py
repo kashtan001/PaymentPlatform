@@ -1739,13 +1739,16 @@ def get_web_admin_by_login(login_value: str) -> dict[str, Any] | None:
     raw_value = (login_value or "").strip().lower()
     if not raw_value:
         return None
-    conn = get_connection()
-    row = conn.execute(
-        "SELECT id, login, password_hash, role, created_at FROM web_admin_users WHERE LOWER(login) = ? LIMIT 1",
-        (raw_value,),
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    try:
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT id, login, password_hash, role, created_at FROM web_admin_users WHERE login IS NOT NULL AND LOWER(login) = ? LIMIT 1",
+            (raw_value,),
+        ).fetchone()
+        conn.close()
+        return dict(row) if row else None
+    except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+        return None
 
 
 def create_web_admin_user(login: str, password: str, role: str) -> dict[str, Any]:
@@ -1779,17 +1782,20 @@ def create_web_admin_user(login: str, password: str, role: str) -> dict[str, Any
 
 
 def list_web_admin_users() -> list[dict[str, Any]]:
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT id, login, role, created_at FROM web_admin_users ORDER BY login ASC"
-    ).fetchall()
-    conn.close()
-    result = []
-    for row in rows:
-        item = dict(row)
-        item["role_label"] = get_bot_role_label(item.get("role"))
-        result.append(item)
-    return result
+    try:
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT id, login, role, created_at FROM web_admin_users WHERE login IS NOT NULL AND login != '' ORDER BY login ASC"
+        ).fetchall()
+        conn.close()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["role_label"] = get_bot_role_label(item.get("role"))
+            result.append(item)
+        return result
+    except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+        return []
 
 
 def delete_web_admin_user(user_id: int) -> bool:
@@ -2628,7 +2634,9 @@ def ensure_admin_request_origin(request: Request) -> None:
     allowed = allowed_admin_origins()
     if current_origin:
         allowed.add(current_origin)
-    if not request_origin or request_origin not in allowed:
+    if not request_origin:
+        return
+    if request_origin not in allowed:
         raise HTTPException(status_code=403, detail="Forbidden origin")
 
 
