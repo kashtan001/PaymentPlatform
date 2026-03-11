@@ -1078,16 +1078,6 @@ def init_db() -> None:
         )
         """
     )
-    ensure_column(conn, "web_admin_users", "login", "TEXT")
-    ensure_column(conn, "web_admin_users", "password_hash", "TEXT")
-    ensure_column(conn, "web_admin_users", "role", "TEXT")
-    ensure_column(conn, "web_admin_users", "created_at", "TEXT")
-    web_admin_columns = {row["name"] for row in conn.execute("PRAGMA table_info(web_admin_users)")}
-    if "username" in web_admin_columns and "login" in web_admin_columns:
-        conn.execute(
-            "UPDATE web_admin_users SET login = username WHERE (login IS NULL OR TRIM(COALESCE(login, '')) = '') AND username IS NOT NULL AND TRIM(username) != ''"
-        )
-        conn.commit()
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_web_admin_users_login
@@ -1740,22 +1730,13 @@ def get_web_admin_by_login(login_value: str) -> dict[str, Any] | None:
     raw_value = (login_value or "").strip().lower()
     if not raw_value:
         return None
-    try:
-        conn = get_connection()
-        columns = {r["name"] for r in conn.execute("PRAGMA table_info(web_admin_users)")}
-        row = conn.execute(
-            "SELECT id, login, password_hash, role, created_at FROM web_admin_users WHERE login IS NOT NULL AND LOWER(TRIM(login)) = ? LIMIT 1",
-            (raw_value,),
-        ).fetchone()
-        if row is None and "username" in columns:
-            row = conn.execute(
-                "SELECT id, COALESCE(login, username) as login, password_hash, role, created_at FROM web_admin_users WHERE username IS NOT NULL AND LOWER(TRIM(username)) = ? LIMIT 1",
-                (raw_value,),
-            ).fetchone()
-        conn.close()
-        return dict(row) if row else None
-    except (sqlite3.OperationalError, sqlite3.ProgrammingError):
-        return None
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT id, login, password_hash, role, created_at FROM web_admin_users WHERE LOWER(login) = ? LIMIT 1",
+        (raw_value,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def create_web_admin_user(login: str, password: str, role: str) -> dict[str, Any]:
@@ -1789,28 +1770,17 @@ def create_web_admin_user(login: str, password: str, role: str) -> dict[str, Any
 
 
 def list_web_admin_users() -> list[dict[str, Any]]:
-    try:
-        conn = get_connection()
-        columns = {r["name"] for r in conn.execute("PRAGMA table_info(web_admin_users)")}
-        if "username" in columns:
-            rows = conn.execute(
-                """SELECT id, COALESCE(NULLIF(TRIM(login), ''), username) as login, role, created_at
-                   FROM web_admin_users WHERE COALESCE(NULLIF(TRIM(login), ''), username) IS NOT NULL AND COALESCE(NULLIF(TRIM(login), ''), username) != ''
-                   ORDER BY login ASC"""
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT id, login, role, created_at FROM web_admin_users WHERE login IS NOT NULL AND TRIM(login) != '' ORDER BY login ASC"
-            ).fetchall()
-        conn.close()
-        result = []
-        for row in rows:
-            item = dict(row)
-            item["role_label"] = get_bot_role_label(item.get("role"))
-            result.append(item)
-        return result
-    except (sqlite3.OperationalError, sqlite3.ProgrammingError):
-        return []
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT id, login, role, created_at FROM web_admin_users ORDER BY login ASC"
+    ).fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["role_label"] = get_bot_role_label(item.get("role"))
+        result.append(item)
+    return result
 
 
 def delete_web_admin_user(user_id: int) -> bool:
@@ -1901,10 +1871,10 @@ def parse_iso_datetime(raw_value: str | None) -> datetime | None:
         return None
 
 
-def build_payment_link_url(link_token: str, lang: str | None = None) -> str:
+def build_payment_link_url(link_token: str, forced_language: str | None = None) -> str:
     base = f"{WEB_URL}/?link={link_token}"
-    if lang and sanitize_language_code(lang):
-        return f"{base}&lang={sanitize_language_code(lang)}"
+    if forced_language and sanitize_language_code(forced_language):
+        return f"{base}&lang={sanitize_language_code(forced_language)}"
     return base
 
 
@@ -2649,9 +2619,7 @@ def ensure_admin_request_origin(request: Request) -> None:
     allowed = allowed_admin_origins()
     if current_origin:
         allowed.add(current_origin)
-    if not request_origin:
-        return
-    if request_origin not in allowed:
+    if not request_origin or request_origin not in allowed:
         raise HTTPException(status_code=403, detail="Forbidden origin")
 
 
@@ -3620,7 +3588,7 @@ async def send_ready_payment_link(
         )
         link = build_payment_link_url(
             str(link_record.get("link_token") or ""),
-            lang=forced_language,
+            forced_language=link_record.get("forced_language"),
         )
     except HTTPException as exc:
         await update.effective_message.reply_text(
@@ -4178,7 +4146,7 @@ async def admin_create_payment_link(payload: CreatePaymentLinkPayload, request: 
         "ok": True,
         "link": build_payment_link_url(
             str(link_record.get("link_token") or ""),
-            lang=payload.language_code if payload.language_code and payload.language_code != "auto" else None,
+            forced_language=link_record.get("forced_language"),
         ),
         "payment_link": link_record,
     }
