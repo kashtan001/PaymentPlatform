@@ -195,7 +195,7 @@
                 </div>
             </header>
 
-            <section x-show="can('edit_requisites') || isAdmin()" x-cloak class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+            <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
                 <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                     <div>
                         <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Geo snapshots</p>
@@ -242,7 +242,7 @@
                 </div>
             </section>
 
-            <div x-show="can('edit_requisites') || isAdmin()" x-cloak class="grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
+            <div class="grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
                 <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
                     <div class="flex items-start justify-between gap-3">
                         <div>
@@ -414,14 +414,6 @@
                                 <input type="text" x-model="linkForm.amount" class="input-shell w-full rounded-2xl px-4 py-4 outline-none" placeholder="250">
                             </label>
                         </div>
-                        <label class="block">
-                            <span class="mb-2 block text-sm text-zinc-400">Валюта</span>
-                            <select x-model="linkForm.currency_code" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
-                                <template x-for="c in currencyOptions()" :key="c.code">
-                                    <option :value="c.code" x-text="c.label + ' (' + c.code + ')'"></option>
-                                </template>
-                            </select>
-                        </label>
                         <div class="grid gap-4 sm:grid-cols-2">
                             <label class="block rounded-[1.5rem] border border-emerald-400/20 bg-emerald-500/10 p-3">
                                 <span class="mb-2 block text-sm text-emerald-100">Язык лендинга</span>
@@ -457,10 +449,9 @@
                             <button type="button" @click="copyText(linkMessage)" class="rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Копировать</button>
                             <button type="button" @click="openLink(linkMessage)" class="rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Открыть</button>
                         </div>
-                </form>
             </section>
 
-            <section x-show="isAdmin()" x-cloak class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+            <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
                 <div>
                     <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Access control</p>
                     <div class="mt-2 panel-title">
@@ -496,7 +487,7 @@
                             </label>
                             <label class="block">
                                 <span class="mb-2 block text-sm text-zinc-400">Логотип</span>
-                                <input type="file" accept=".png,.jpg,.jpeg,.webp,.gif" @change="handleChannelLogoChange" class="input-shell w-full rounded-2xl px-4 py-3 outline-none file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-black">
+                                <input type="file" accept=".png,.jpg,.jpeg,.webp,.gif,.svg" @change="handleChannelLogoChange" class="input-shell w-full rounded-2xl px-4 py-3 outline-none file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-black">
                             </label>
                         </div>
 
@@ -611,7 +602,7 @@
                 </div>
             </section>
 
-            <details x-show="isAdmin()" x-cloak class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+            <details class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
                 <summary class="cursor-pointer list-none text-lg font-semibold">
                     Дополнительно
                 </summary>
@@ -1017,7 +1008,6 @@
                 linkForm: {
                     geo_code: "",
                     amount: "",
-                    currency_code: "EUR",
                     language_code: "auto",
                     handler_user_id: "",
                     label: "",
@@ -1042,6 +1032,14 @@
                     geo_name: "",
                     default_language: "en",
                     refresh_minutes: 15
+                },
+                managerMessage: "",
+                managerForm: {
+                    manager_id: "new",
+                    geo_code: "",
+                    manager_name: "",
+                    manager_telegram_url: "",
+                    make_default: true
                 },
                 channelMessage: "",
                 channelForm: {
@@ -1077,18 +1075,6 @@
 
                 languageOptions() {
                     return this.dashboard.languages || [];
-                },
-
-                currencyOptions() {
-                    return this.dashboard.currencies || [];
-                },
-
-                isAdmin() {
-                    return this.dashboard.current_user?.role === "admin";
-                },
-
-                can(permission) {
-                    return (this.dashboard.permissions || []).includes(permission);
                 },
 
                 languageLabel(code) {
@@ -1144,6 +1130,10 @@
                     return this.languageLabel(this.linkForm.language_code || "auto");
                 },
 
+                managersForGeo(geoCode) {
+                    return (this.dashboard.managers || []).filter((item) => item.geo_code === geoCode);
+                },
+
                 requisitesForGeo(geoCode) {
                     return (this.dashboard.requisites_history || [])
                         .filter((item) => item.geo_code === geoCode)
@@ -1154,6 +1144,7 @@
                     this.editingGeoCode = code;
                     this.requisitesForm.geo_code = code;
                     this.syncGeoForm();
+                    this.resetManagerForm();
                     this.syncLinkSelections();
                 },
 
@@ -1175,6 +1166,35 @@
                         bic_swift: "",
                         receiver_name: ""
                     };
+                },
+
+                syncManagerForm() {
+                    const currentGeo = this.editingGeoCode;
+                    this.managerForm.geo_code = currentGeo;
+                    const selectedId = String(this.managerForm.manager_id || "new");
+                    if (selectedId === "new") {
+                        this.managerForm.manager_name = "";
+                        this.managerForm.manager_telegram_url = "";
+                        this.managerForm.make_default = true;
+                        return;
+                    }
+                    const manager = this.managersForGeo(currentGeo).find((item) => String(item.id) === selectedId);
+                    if (!manager) {
+                        this.resetManagerForm();
+                        return;
+                    }
+                    this.managerForm.manager_name = manager.manager_name || "";
+                    this.managerForm.manager_telegram_url = manager.manager_telegram_url || "";
+                    this.managerForm.make_default = String(this.geoForm.default_manager_id || "") === String(manager.id);
+                },
+
+                managerOptionLabel(item) {
+                    const parts = [
+                        `ID ${item.id}`,
+                        item.manager_name || "",
+                        item.manager_telegram_url || ""
+                    ].filter(Boolean);
+                    return parts.join(" | ");
                 },
 
                 handlerOptionLabel(item) {
@@ -1224,10 +1244,6 @@
                         const data = await response.json();
                         this.authenticated = Boolean(data.authenticated);
                         this.authConfigured = data.configured !== false;
-                        if (this.authenticated) {
-                            this.dashboard.current_user = data.user || null;
-                            this.dashboard.permissions = data.permissions || [];
-                        }
                     } catch (error) {
                         this.authenticated = false;
                         this.authConfigured = null;
@@ -1294,6 +1310,7 @@
                             this.linkForm.geo_code = this.availableGeos()[0].profile.geo_code;
                         }
                         this.syncGeoForm();
+                        this.syncManagerForm();
                         this.syncLinkSelections();
                     } catch (error) {
                         console.error(error);
@@ -1397,6 +1414,68 @@
                     }
                 },
 
+                resetManagerForm() {
+                    this.managerForm = {
+                        manager_id: "new",
+                        geo_code: this.editingGeoCode || "",
+                        manager_name: "",
+                        manager_telegram_url: "",
+                        make_default: true
+                    };
+                    this.managerMessage = "";
+                },
+
+                async saveManager() {
+                    this.managerMessage = "";
+                    try {
+                        const payload = {
+                            manager_id: this.managerForm.manager_id === "new" ? null : Number(this.managerForm.manager_id),
+                            geo_code: this.editingGeoCode,
+                            manager_name: this.managerForm.manager_name,
+                            manager_telegram_url: this.managerForm.manager_telegram_url,
+                            make_default: Boolean(this.managerForm.make_default)
+                        };
+                        const response = await fetch(this.apiUrl("/api/admin/managers"), {
+                            method: "POST",
+                            credentials: "include",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(payload)
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) {
+                            throw new Error(data.detail || "Не удалось сохранить менеджера");
+                        }
+                        this.managerMessage = `Менеджер ${data.manager?.manager_name || ""} сохранён`;
+                        await this.refreshDashboard();
+                        this.geoForm.default_manager_id = data.profile?.default_manager_id ? String(data.profile.default_manager_id) : "";
+                        this.managerForm.manager_id = data.manager?.id ? String(data.manager.id) : "new";
+                        this.syncManagerForm();
+                    } catch (error) {
+                        this.managerMessage = error.message || "Не удалось сохранить менеджера";
+                    }
+                },
+
+                async applyHistoryItem(item) {
+                    if (!item || !item.geo_code) {
+                        return;
+                    }
+                    try {
+                        const response = await fetch(this.apiUrl(`/api/admin/requisites/${item.geo_code}/history/${item.id}/activate`), {
+                            method: "POST",
+                            credentials: "include"
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) {
+                            throw new Error(data.detail || "Не удалось активировать реквизиты");
+                        }
+                        this.geoMessage = `Реквизиты из истории ID ${item.id} снова активны для ${item.geo_code}`;
+                        this.selectGeo(item.geo_code);
+                        await this.refreshDashboard();
+                    } catch (error) {
+                        this.geoMessage = error.message || "Не удалось активировать реквизиты";
+                    }
+                },
+
                 async deleteHistoryItem(item) {
                     if (!item || !item.geo_code) {
                         return;
@@ -1421,41 +1500,45 @@
                     }
                 },
 
-                async buildLink() {
-                    this.linkMessage = "";
+                buildLink() {
                     const amount = Number(String(this.linkForm.amount).replace(",", "."));
                     if (!Number.isFinite(amount) || amount <= 0) {
                         this.linkMessage = "Укажите корректную сумму";
                         return;
                     }
-                    if (!this.linkForm.handler_user_id) {
-                        this.linkMessage = "Выберите обработчика";
+                    const geoCode = this.linkForm.geo_code || this.availableGeos()[0]?.profile?.geo_code || "";
+                    const currentGeo = this.availableGeos().find((item) => item.profile.geo_code === geoCode);
+                    if (!currentGeo) {
+                        this.linkMessage = "Ссылку нельзя создать: нет GEO с доступными реквизитами";
                         return;
                     }
-                    try {
-                        const response = await fetch(this.apiUrl("/api/admin/links"), {
-                            method: "POST",
-                            credentials: "include",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                amount: amount,
-                                geo_code: this.linkForm.geo_code || this.availableGeos()[0]?.profile?.geo_code || "",
-                                currency_code: this.linkForm.currency_code || "EUR",
-                                language_code: this.linkForm.language_code === "auto" ? null : (this.linkForm.language_code || null),
-                                handler_user_id: Number(this.linkForm.handler_user_id),
-                                label: this.linkForm.label || "",
-                                comment: this.linkForm.comment || ""
-                            })
-                        });
-                        const data = await response.json().catch(() => ({}));
-                        if (!response.ok) {
-                            throw new Error(data.detail || "Не удалось создать ссылку");
-                        }
-                        this.linkMessage = data.link || "";
-                        await this.refreshDashboard();
-                    } catch (error) {
-                        this.linkMessage = error.message || "Не удалось создать ссылку";
+                    const selectedHandler = this.handlers().find((item) => String(item.user_id) === String(this.linkForm.handler_user_id));
+                    if (!selectedHandler?.username) {
+                        this.linkMessage = "Ссылку нельзя создать: выберите обработчика с username";
+                        return;
                     }
+
+                    const rawLabel = String(this.linkForm.label || "").trim();
+                    const rawComment = String(this.linkForm.comment || "").trim();
+
+                    const url = new URL(this.dashboard.web_url || window.location.origin);
+                    url.searchParams.set("payment", this.formatQueryAmount(amount));
+                    url.searchParams.set("geo", geoCode);
+                    url.searchParams.set("mgr_link", `https://t.me/${selectedHandler.username}`);
+                    if (this.linkForm.language_code && this.linkForm.language_code !== "auto") {
+                        url.searchParams.set("lang", this.linkForm.language_code);
+                    }
+                    if (rawLabel) {
+                        url.searchParams.set("label", rawLabel);
+                    }
+                    if (rawComment) {
+                        url.searchParams.set("comment", rawComment);
+                    }
+                    this.linkMessage = url.toString();
+                },
+
+                formatQueryAmount(amount) {
+                    return Number(amount).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
                 },
 
                 formatRoleLabel(roleCode) {
