@@ -3,6 +3,7 @@ import os
 import re
 import secrets
 import sqlite3
+from uuid import uuid4
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any
 from urllib.parse import urlencode, urlparse
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -29,6 +30,7 @@ from telegram.ext import (
 # --- PATHS & CONFIG ---
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+CHANNEL_LOGO_DIR = STATIC_DIR / "uploads" / "channel-logos"
 
 
 def resolve_db_file() -> Path:
@@ -76,6 +78,10 @@ DEFAULT_REFRESH_MINUTES = max(1, parse_optional_int(os.getenv("DEFAULT_REFRESH_M
 DEFAULT_PREVIEW_AMOUNT = 250.0
 ALLOW_PREVIEW_MODE = os.getenv("ALLOW_PREVIEW_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
 CLIENT_NAME_MAX_LENGTH = 80
+CHANNEL_NAME_MAX_LENGTH = 120
+CHANNEL_LOGO_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+CHANNEL_LOGO_MAX_BYTES = 2 * 1024 * 1024
+PAYMENT_LINK_TOKEN_BYTES = 18
 
 BOT_ENABLED = bool(BOT_TOKEN)
 WAITING_GEO_SELECTION = 1
@@ -83,14 +89,15 @@ WAITING_REQUISITES = 2
 WAITING_MANAGER_ACTION = 3
 WAITING_MANAGER = 4
 WAITING_LINK_AMOUNT = 5
-WAITING_LINK_REQUISITES = 6
-WAITING_LINK_MANAGER = 7
-WAITING_LINK_LANGUAGE = 8
-WAITING_LINK_LABEL = 9
-WAITING_LINK_COMMENT = 10
+WAITING_LINK_CURRENCY = 6
+WAITING_LINK_REQUISITES = 7
+WAITING_LINK_LABEL = 8
+WAITING_LINK_COMMENT = 9
+WAITING_LINK_MANAGER = 10
+WAITING_LINK_LANGUAGE = 11
 MENU_BUTTONS_PATTERN = (
     r"^(🗺 Выбрать GEO|📊 GEO статус|📊 Активные реквизиты|📝 Реквизиты|🗂 История реквизитов|"
-    r"🗑 Удалить реквизит|👤 Менеджер|👥 Права доступа|🔗 Ссылка на оплату|🛠 Админка|ℹ️ Помощь)$"
+    r"🗑 Удалить реквизит|👥 Права доступа|🔗 Ссылка на оплату|🛠 Админка|ℹ️ Помощь)$"
 )
 MENU_BUTTON_LABELS = {
     "🗺 Выбрать GEO",
@@ -99,7 +106,6 @@ MENU_BUTTON_LABELS = {
     "📝 Реквизиты",
     "🗂 История реквизитов",
     "🗑 Удалить реквизит",
-    "👤 Менеджер",
     "👥 Права доступа",
     "🔗 Ссылка на оплату",
     "🛠 Админка",
@@ -131,8 +137,15 @@ LANGUAGE_OPTIONS = [
     {"code": "it", "label": "Italiano"},
     {"code": "de", "label": "Deutsch"},
     {"code": "fr", "label": "Français"},
+    {"code": "ro", "label": "Română"},
 ]
 LANDING_LANGUAGE_SET = {item["code"] for item in LANGUAGE_OPTIONS}
+CURRENCY_OPTIONS = [
+    {"code": "EUR", "label": "Евро"},
+    {"code": "USD", "label": "Доллар"},
+    {"code": "RON", "label": "Румынский рон"},
+]
+CURRENCY_SET = {item["code"] for item in CURRENCY_OPTIONS}
 BOT_ROLE_OPTIONS = [
     {"code": "handler", "label": "Обработчик"},
     {"code": "processor", "label": "Процессор"},
@@ -149,7 +162,6 @@ BOT_ROLE_PERMISSIONS = {
         "edit_requisites",
         "view_requisites_history",
         "delete_requisites",
-        "edit_manager",
         "manage_access",
         "create_link",
         "open_admin_panel",
@@ -163,12 +175,21 @@ LANGUAGE_TO_GEO_MAP = {
     "it": "IT",
     "de": "DE",
     "fr": "FR",
+    "ro": "RO",
 }
 SPECIAL_LANGUAGE_MAP = {
     "nb": "no",
     "nn": "no",
 }
 DEFAULT_GEO_CONFIGS = {
+    "LT": {
+        "geo_name": "Lithuania",
+        "default_language": "en",
+        "manager_name": "Lithuania manager",
+        "manager_telegram_url": "",
+        "default_manager_id": None,
+        "refresh_minutes": DEFAULT_REFRESH_MINUTES,
+    },
     "ES": {
         "geo_name": "Spain",
         "default_language": "es",
@@ -193,17 +214,10 @@ DEFAULT_GEO_CONFIGS = {
         "default_manager_id": None,
         "refresh_minutes": DEFAULT_REFRESH_MINUTES,
     },
-    "FR": {
-        "geo_name": "France",
-        "default_language": "fr",
-        "manager_name": "France manager",
-        "manager_telegram_url": "",
-        "default_manager_id": None,
-        "refresh_minutes": DEFAULT_REFRESH_MINUTES,
-    },
 }
 SUPPORTED_GEOS = tuple(DEFAULT_GEO_CONFIGS.keys())
 SUPPORTED_GEO_SET = set(SUPPORTED_GEOS)
+GEO_CODE_PATTERN = re.compile(r"^[A-Z0-9_-]{2,12}$")
 
 
 class AdminLoginPayload(BaseModel):
@@ -219,6 +233,7 @@ class GeoConfigPayload(BaseModel):
 
 
 class RequisitesPayload(BaseModel):
+    geo_code: str | None = None
     bank_name: str
     card_number: str
     bic_swift: str = ""
@@ -242,6 +257,23 @@ class LandingClientPayload(BaseModel):
 class BotUserPayload(BaseModel):
     user_id: int
     role: str
+    channel_id: int | None = None
+
+
+class CreatePaymentLinkPayload(BaseModel):
+    amount: float
+    geo_code: str
+    currency_code: str | None = None
+    language_code: str | None = None
+    handler_user_id: int
+    label: str = ""
+    comment: str = ""
+
+
+class ChannelPayload(BaseModel):
+    channel_id: int | None = None
+    channel_name: str
+    logo_path: str | None = None
 
 
 def utc_now() -> datetime:
@@ -276,9 +308,82 @@ def ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, d
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
 
 
-def sanitize_geo_code(value: str | None) -> str | None:
+def normalize_geo_code(value: str | None) -> str | None:
     code = (value or "").strip().upper()
-    return code if code in SUPPORTED_GEO_SET else None
+    return code if GEO_CODE_PATTERN.fullmatch(code) else None
+
+
+def build_geo_default_config(geo_code: str) -> dict[str, Any]:
+    safe_geo = normalize_geo_code(geo_code) or "ES"
+    fallback = DEFAULT_GEO_CONFIGS.get(safe_geo)
+    if fallback is not None:
+        return fallback
+    return {
+        "geo_name": safe_geo,
+        "default_language": "en",
+        "manager_name": f"{safe_geo} manager",
+        "manager_telegram_url": "",
+        "default_manager_id": None,
+        "refresh_minutes": DEFAULT_REFRESH_MINUTES,
+    }
+
+
+def list_known_geo_codes() -> list[str]:
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT geo_code FROM geo_profiles
+        UNION
+        SELECT geo_code FROM geo_requisites
+        UNION
+        SELECT geo_code FROM geo_managers
+        ORDER BY geo_code ASC
+        """
+    ).fetchall()
+    conn.close()
+    codes = {code for code in (normalize_geo_code(row["geo_code"]) for row in rows) if code}
+    codes.update(DEFAULT_GEO_CONFIGS.keys())
+    return sorted(codes)
+
+
+def list_geo_codes_with_requisites() -> list[str]:
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT DISTINCT geo_code
+        FROM geo_requisites
+        ORDER BY geo_code ASC
+        """
+    ).fetchall()
+    conn.close()
+    return [code for code in (normalize_geo_code(row["geo_code"]) for row in rows) if code]
+
+
+def sanitize_geo_code(value: str | None, allow_unknown: bool = False) -> str | None:
+    code = normalize_geo_code(value)
+    if not code:
+        return None
+    if allow_unknown:
+        return code
+    return code if code in set(list_known_geo_codes()) else None
+
+
+def geo_has_requisites(geo_code: str) -> bool:
+    safe_geo = sanitize_geo_code(geo_code) or normalize_geo_code(geo_code)
+    if not safe_geo:
+        return False
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT COUNT(*) AS value FROM geo_requisites WHERE geo_code = ?",
+        (safe_geo,),
+    ).fetchone()
+    conn.close()
+    return bool(row and int(row["value"]) > 0)
+
+
+def get_first_available_geo_code() -> str | None:
+    available = list_geo_codes_with_requisites()
+    return available[0] if available else None
 
 
 def sanitize_language_code(value: str | None) -> str | None:
@@ -286,9 +391,63 @@ def sanitize_language_code(value: str | None) -> str | None:
     return code if code in LANDING_LANGUAGE_SET else None
 
 
+def sanitize_currency_code(value: str | None) -> str | None:
+    code = (value or "").strip().upper()
+    return code if code in CURRENCY_SET else None
+
+
 def sanitize_bot_role(value: str | None, default: str = "handler") -> str:
     code = (value or "").strip().lower()
     return code if code in BOT_ROLE_SET else default
+
+
+def sanitize_channel_name(value: str | None) -> str:
+    clean_value = re.sub(r"\s+", " ", (value or "").strip())
+    return clean_value[:CHANNEL_NAME_MAX_LENGTH]
+
+
+def normalize_static_asset_path(value: str | None) -> str:
+    path = (value or "").strip()
+    if not path:
+        return ""
+    if path.startswith("/static/"):
+        return path
+    if path.startswith("static/"):
+        return f"/{path}"
+    return ""
+
+
+def channel_logo_public_url(logo_path: str | None) -> str:
+    return normalize_static_asset_path(logo_path)
+
+
+def get_logo_extension(filename: str | None) -> str:
+    suffix = Path(filename or "").suffix.lower()
+    return suffix if suffix in CHANNEL_LOGO_EXTENSIONS else ""
+
+
+def remove_channel_logo_file(logo_path: str | None) -> None:
+    public_path = normalize_static_asset_path(logo_path)
+    if not public_path.startswith("/static/"):
+        return
+    file_path = BASE_DIR / public_path.removeprefix("/")
+    if file_path.is_file():
+        file_path.unlink(missing_ok=True)
+
+
+async def store_channel_logo(upload: UploadFile) -> str:
+    extension = get_logo_extension(upload.filename)
+    if not extension:
+        raise HTTPException(status_code=400, detail="Логотип должен быть PNG, JPG, JPEG, WEBP или GIF")
+    filename = f"channel-{uuid4().hex}{extension}"
+    target_path = CHANNEL_LOGO_DIR / filename
+    content = await upload.read(CHANNEL_LOGO_MAX_BYTES + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="Файл логотипа пустой")
+    if len(content) > CHANNEL_LOGO_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Логотип не должен быть больше 2 МБ")
+    target_path.write_bytes(content)
+    return f"/static/uploads/channel-logos/{filename}"
 
 
 def get_bot_role_label(role: str | None) -> str:
@@ -298,6 +457,11 @@ def get_bot_role_label(role: str | None) -> str:
 def bot_role_has_permission(role: str | None, permission: str) -> bool:
     safe_role = sanitize_bot_role(role, "handler")
     return permission in BOT_ROLE_PERMISSIONS.get(safe_role, set())
+
+
+def web_permissions_for_role(role: str | None) -> list[str]:
+    safe_role = sanitize_bot_role(role, "handler")
+    return sorted(BOT_ROLE_PERMISSIONS.get(safe_role, set()))
 
 
 def normalize_language_code(value: str | None) -> str | None:
@@ -316,19 +480,14 @@ def clean_client_name(raw_value: str | None) -> str:
 
 
 def sanitize_payment_label(raw_value: str | None) -> str:
-    value = (raw_value or "").strip().lower()
+    value = re.sub(r"\s+", " ", (raw_value or "").strip())
     if not value:
         return ""
-    value = re.sub(r"[^a-z0-9]+", "-", value)
-    value = re.sub(r"-{2,}", "-", value).strip("-")
-    return value[:80]
+    return value[:160]
 
 
 def payment_label_has_only_latin(raw_value: str | None) -> bool:
-    value = (raw_value or "").strip()
-    if not value:
-        return True
-    return re.fullmatch(r"[A-Za-z0-9 _-]+", value) is not None
+    return True
 
 
 def normalize_manager_link(raw_value: str | None) -> str:
@@ -344,9 +503,17 @@ def normalize_manager_link(raw_value: str | None) -> str:
     return value
 
 
-def has_manager_contact(geo_code: str, manager_id: int | None = None) -> bool:
-    manager = resolve_manager_for_geo(geo_code, manager_id)
-    return bool(normalize_manager_link(manager.get("manager_telegram_url")))
+def extract_telegram_username(raw_value: str | None) -> str:
+    value = normalize_manager_link(raw_value)
+    if not value:
+        return ""
+    if value.startswith("https://t.me/"):
+        return value.removeprefix("https://t.me/").strip().strip("/")
+    if value.startswith("http://t.me/"):
+        return value.removeprefix("http://t.me/").strip().strip("/")
+    if value.startswith("@"):
+        return value[1:].strip()
+    return ""
 
 
 def clean_payment_comment(raw_value: str | None) -> str:
@@ -380,6 +547,7 @@ def format_query_amount(amount: float) -> str:
 def build_payment_link(
     amount: float,
     geo_code: str,
+    currency_code: str | None = None,
     label: str = "",
     comment: str = "",
     forced_language: str | None = None,
@@ -388,12 +556,15 @@ def build_payment_link(
     manager_link_override: str | None = None,
 ) -> str:
     safe_geo = sanitize_geo_code(geo_code) or "ES"
-    safe_manager_link = normalize_manager_link(manager_link_override)
-    if not safe_manager_link and not has_manager_contact(safe_geo, manager_id):
-        raise HTTPException(status_code=400, detail=f"Для GEO {safe_geo} не задан контакт менеджера")
+    handler_contact = resolve_handler_contact(manager_id, manager_link_override)
+    if resolve_requisites_for_geo(safe_geo, requisites_id) is None:
+        raise HTTPException(status_code=400, detail=f"Для GEO {safe_geo} не найдено ни одного реквизита")
+    if handler_contact is None or not normalize_manager_link(handler_contact.get("manager_telegram_url")):
+        raise HTTPException(status_code=400, detail="Не выбран обработчик с Telegram-ссылкой")
     params = {
         "payment": format_query_amount(amount),
         "geo": safe_geo,
+        "currency": sanitize_currency_code(currency_code) or DEFAULT_CURRENCY,
     }
     clean_label = sanitize_payment_label(label)
     clean_comment = clean_payment_comment(comment)
@@ -408,8 +579,7 @@ def build_payment_link(
         params["req"] = str(requisites_id)
     if manager_id is not None and manager_id > 0:
         params["mgr"] = str(manager_id)
-    if safe_manager_link:
-        params["mgr_link"] = safe_manager_link
+    params["mgr_link"] = str(handler_contact.get("manager_telegram_url") or "")
     return f"{WEB_URL}/?{urlencode(params)}"
 
 
@@ -422,15 +592,16 @@ def resolve_geo_code(requested_geo: str | None, country_code: str | None, browse
     if explicit_geo:
         return explicit_geo
 
+    available_geos = set(list_geo_codes_with_requisites())
     visitor_country = (country_code or "").strip().upper()
-    if visitor_country in SUPPORTED_GEO_SET:
+    if visitor_country in available_geos:
         return visitor_country
 
     mapped_geo = LANGUAGE_TO_GEO_MAP.get((browser_language or "").strip().lower())
-    if mapped_geo:
+    if mapped_geo and mapped_geo in available_geos:
         return mapped_geo
 
-    return "ES"
+    return get_first_available_geo_code() or "ES"
 
 
 def resolve_recommended_language(
@@ -476,9 +647,131 @@ def legacy_seed_requisites(conn: sqlite3.Connection) -> dict[str, str]:
     }
 
 
+def get_channel_by_id(channel_id: int | None, conn: sqlite3.Connection | None = None) -> dict[str, Any] | None:
+    if channel_id is None or channel_id <= 0:
+        return None
+    owns_connection = conn is None
+    db = conn or get_connection()
+    row = db.execute(
+        """
+        SELECT id, channel_name, logo_path, created_at, updated_at
+        FROM channels
+        WHERE id = ?
+        LIMIT 1
+        """,
+        (channel_id,),
+    ).fetchone()
+    if owns_connection:
+        db.close()
+    if row is None:
+        return None
+    item = dict(row)
+    item["logo_url"] = channel_logo_public_url(item.get("logo_path"))
+    return item
+
+
+def list_channels() -> list[dict[str, Any]]:
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT
+            c.id,
+            c.channel_name,
+            c.logo_path,
+            c.created_at,
+            c.updated_at,
+            COUNT(admin.user_id) AS handler_count
+        FROM channels AS c
+        LEFT JOIN bot_admins AS admin
+            ON admin.channel_id = c.id AND admin.role = 'handler'
+        GROUP BY c.id
+        ORDER BY COALESCE(c.channel_name, ''), c.id
+        """
+    ).fetchall()
+    conn.close()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["logo_url"] = channel_logo_public_url(item.get("logo_path"))
+        result.append(item)
+    return result
+
+
+async def save_channel(
+    channel_name: str,
+    channel_id: int | None = None,
+    logo_upload: UploadFile | None = None,
+    remove_logo: bool = False,
+) -> dict[str, Any]:
+    clean_name = sanitize_channel_name(channel_name)
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Название канала обязательно")
+
+    conn = get_connection()
+    existing = get_channel_by_id(channel_id, conn) if channel_id else None
+    if channel_id and existing is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Канал не найден")
+
+    new_logo_path = existing.get("logo_path") if existing else ""
+    if remove_logo and new_logo_path:
+        remove_channel_logo_file(new_logo_path)
+        new_logo_path = ""
+    if logo_upload is not None and logo_upload.filename:
+        uploaded_logo_path = await store_channel_logo(logo_upload)
+        if new_logo_path and new_logo_path != uploaded_logo_path:
+            remove_channel_logo_file(new_logo_path)
+        new_logo_path = uploaded_logo_path
+
+    now_value = utc_now_iso()
+    if existing is None:
+        cursor = conn.execute(
+            """
+            INSERT INTO channels (channel_name, logo_path, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (clean_name, new_logo_path or None, now_value, now_value),
+        )
+        saved_id = int(cursor.lastrowid)
+    else:
+        saved_id = int(existing["id"])
+        conn.execute(
+            """
+            UPDATE channels
+            SET channel_name = ?, logo_path = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (clean_name, new_logo_path or None, now_value, saved_id),
+        )
+
+    conn.commit()
+    conn.close()
+    return get_channel_by_id(saved_id)
+
+
+def delete_channel(channel_id: int) -> dict[str, Any]:
+    existing = get_channel_by_id(channel_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Канал не найден")
+
+    conn = get_connection()
+    linked = conn.execute(
+        "SELECT COUNT(*) AS value FROM bot_admins WHERE channel_id = ?",
+        (channel_id,),
+    ).fetchone()
+    if linked and int(linked["value"]) > 0:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Канал привязан к обработчикам. Сначала отвяжите его.")
+
+    conn.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
+    conn.commit()
+    conn.close()
+    remove_channel_logo_file(existing.get("logo_path"))
+    return {"deleted_channel_id": channel_id}
+
+
 def seed_geo_data(conn: sqlite3.Connection) -> None:
     now_value = utc_now_iso()
-    default_requisites = legacy_seed_requisites(conn)
     for geo_code, config in DEFAULT_GEO_CONFIGS.items():
         conn.execute(
             """
@@ -500,25 +793,40 @@ def seed_geo_data(conn: sqlite3.Connection) -> None:
             ),
         )
 
-        row = conn.execute(
-            "SELECT COUNT(*) AS value FROM geo_requisites WHERE geo_code = ?",
-            (geo_code,),
-        ).fetchone()
-        if row and row["value"] == 0:
-            conn.execute(
-                """
-                INSERT INTO geo_requisites (geo_code, bank_name, card_number, bic_swift, receiver_name, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    geo_code,
-                    default_requisites["bank_name"],
-                    default_requisites["card_number"],
-                    default_requisites["bic_swift"],
-                    default_requisites["receiver_name"],
-                    now_value,
-                ),
-            )
+
+def backfill_geo_requisites_sequence_numbers(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT id, geo_code, sequence_number
+        FROM geo_requisites
+        ORDER BY geo_code ASC, created_at ASC, id ASC
+        """
+    ).fetchall()
+    counters: dict[str, int] = {}
+    for row in rows:
+        safe_geo = normalize_geo_code(row["geo_code"])
+        if not safe_geo:
+            continue
+        counters[safe_geo] = counters.get(safe_geo, 0) + 1
+        if row["sequence_number"] and int(row["sequence_number"]) > 0:
+            continue
+        conn.execute(
+            "UPDATE geo_requisites SET sequence_number = ? WHERE id = ?",
+            (counters[safe_geo], row["id"]),
+        )
+
+
+def get_next_requisites_sequence(geo_code: str, conn: sqlite3.Connection | None = None) -> int:
+    safe_geo = sanitize_geo_code(geo_code) or normalize_geo_code(geo_code) or "ES"
+    owns_connection = conn is None
+    db = conn or get_connection()
+    row = db.execute(
+        "SELECT COALESCE(MAX(sequence_number), 0) AS value FROM geo_requisites WHERE geo_code = ?",
+        (safe_geo,),
+    ).fetchone()
+    if owns_connection:
+        db.close()
+    return int(row["value"]) + 1 if row else 1
 
 
 def migrate_legacy_geo_managers(conn: sqlite3.Connection) -> None:
@@ -601,8 +909,20 @@ def init_db() -> None:
             username TEXT,
             full_name TEXT,
             role TEXT NOT NULL DEFAULT 'admin',
+            channel_id INTEGER,
             added_at TEXT,
             added_by INTEGER
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS channels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_name TEXT NOT NULL,
+            logo_path TEXT,
+            created_at TEXT,
+            updated_at TEXT
         )
         """
     )
@@ -653,6 +973,7 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS geo_requisites (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             geo_code TEXT NOT NULL,
+            sequence_number INTEGER,
             bank_name TEXT NOT NULL,
             card_number TEXT NOT NULL,
             bic_swift TEXT DEFAULT '',
@@ -694,6 +1015,39 @@ def init_db() -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS payment_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            link_token TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'active',
+            geo_code TEXT NOT NULL,
+            requisites_id INTEGER,
+            handler_user_id INTEGER,
+            payment_amount REAL NOT NULL,
+            payment_currency TEXT NOT NULL,
+            forced_language TEXT,
+            payment_label TEXT,
+            payment_comment TEXT,
+            snapshot_handler_name TEXT,
+            snapshot_handler_username TEXT,
+            snapshot_handler_telegram_url TEXT,
+            snapshot_channel_name TEXT,
+            snapshot_channel_logo_url TEXT,
+            snapshot_bank_name TEXT NOT NULL,
+            snapshot_card_number TEXT NOT NULL,
+            snapshot_bic_swift TEXT,
+            snapshot_receiver_name TEXT NOT NULL,
+            created_by_user_id INTEGER,
+            creator_role TEXT,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            expired_at TEXT,
+            last_opened_at TEXT,
+            open_count INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS bot_activity_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             actor_user_id INTEGER,
@@ -723,15 +1077,48 @@ def init_db() -> None:
     ensure_column(conn, "visits", "snapshot_bic_swift", "TEXT")
     ensure_column(conn, "visits", "snapshot_receiver_name", "TEXT")
     ensure_column(conn, "visits", "payment_comment", "TEXT")
+    ensure_column(conn, "visits", "payment_currency", "TEXT")
+    ensure_column(conn, "visits", "payment_link_token", "TEXT")
+    ensure_column(conn, "visits", "payment_link_status", "TEXT")
     ensure_column(conn, "bot_admins", "role", "TEXT NOT NULL DEFAULT 'admin'")
+    ensure_column(conn, "bot_admins", "channel_id", "INTEGER")
     ensure_column(conn, "bot_admin_preferences", "selected_manager_id", "INTEGER")
     ensure_column(conn, "geo_requisites", "bic_swift", "TEXT DEFAULT ''")
+    ensure_column(conn, "geo_requisites", "sequence_number", "INTEGER")
     ensure_column(conn, "geo_profiles", "default_manager_id", "INTEGER")
     ensure_column(conn, "bot_activity_log", "actor_role", "TEXT")
     ensure_column(conn, "bot_activity_log", "geo_code", "TEXT")
     ensure_column(conn, "bot_activity_log", "target_user_id", "INTEGER")
     ensure_column(conn, "bot_activity_log", "payload", "TEXT")
     ensure_column(conn, "bot_activity_log", "created_at", "TEXT")
+    ensure_column(conn, "channels", "logo_path", "TEXT")
+    ensure_column(conn, "channels", "created_at", "TEXT")
+    ensure_column(conn, "channels", "updated_at", "TEXT")
+    ensure_column(conn, "payment_links", "status", "TEXT NOT NULL DEFAULT 'active'")
+    ensure_column(conn, "payment_links", "geo_code", "TEXT")
+    ensure_column(conn, "payment_links", "requisites_id", "INTEGER")
+    ensure_column(conn, "payment_links", "handler_user_id", "INTEGER")
+    ensure_column(conn, "payment_links", "payment_amount", "REAL")
+    ensure_column(conn, "payment_links", "payment_currency", "TEXT")
+    ensure_column(conn, "payment_links", "forced_language", "TEXT")
+    ensure_column(conn, "payment_links", "payment_label", "TEXT")
+    ensure_column(conn, "payment_links", "payment_comment", "TEXT")
+    ensure_column(conn, "payment_links", "snapshot_handler_name", "TEXT")
+    ensure_column(conn, "payment_links", "snapshot_handler_username", "TEXT")
+    ensure_column(conn, "payment_links", "snapshot_handler_telegram_url", "TEXT")
+    ensure_column(conn, "payment_links", "snapshot_channel_name", "TEXT")
+    ensure_column(conn, "payment_links", "snapshot_channel_logo_url", "TEXT")
+    ensure_column(conn, "payment_links", "snapshot_bank_name", "TEXT")
+    ensure_column(conn, "payment_links", "snapshot_card_number", "TEXT")
+    ensure_column(conn, "payment_links", "snapshot_bic_swift", "TEXT")
+    ensure_column(conn, "payment_links", "snapshot_receiver_name", "TEXT")
+    ensure_column(conn, "payment_links", "created_by_user_id", "INTEGER")
+    ensure_column(conn, "payment_links", "creator_role", "TEXT")
+    ensure_column(conn, "payment_links", "created_at", "TEXT")
+    ensure_column(conn, "payment_links", "expires_at", "TEXT")
+    ensure_column(conn, "payment_links", "expired_at", "TEXT")
+    ensure_column(conn, "payment_links", "last_opened_at", "TEXT")
+    ensure_column(conn, "payment_links", "open_count", "INTEGER NOT NULL DEFAULT 0")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_visits_visit_token
@@ -740,19 +1127,38 @@ def init_db() -> None:
     )
     conn.execute(
         """
+        CREATE INDEX IF NOT EXISTS idx_geo_requisites_sequence
+        ON geo_requisites (geo_code, sequence_number ASC, id ASC)
+        """
+    )
+    conn.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_bot_activity_actor
         ON bot_activity_log (actor_user_id, id DESC)
         """
     )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_payment_links_token
+        ON payment_links (link_token)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_payment_links_status
+        ON payment_links (status, expires_at)
+        """
+    )
     seed_bot_admins(conn)
     seed_geo_data(conn)
+    backfill_geo_requisites_sequence_numbers(conn)
     migrate_legacy_geo_managers(conn)
     conn.commit()
     conn.close()
 
 
 def get_geo_profile(geo_code: str) -> dict[str, Any]:
-    safe_geo = sanitize_geo_code(geo_code) or "ES"
+    safe_geo = sanitize_geo_code(geo_code) or normalize_geo_code(geo_code) or "ES"
     conn = get_connection()
     row = conn.execute(
         """
@@ -768,7 +1174,7 @@ def get_geo_profile(geo_code: str) -> dict[str, Any]:
     if row:
         return dict(row)
 
-    fallback = DEFAULT_GEO_CONFIGS[safe_geo]
+    fallback = build_geo_default_config(safe_geo)
     return {
         "geo_code": safe_geo,
         "geo_name": fallback["geo_name"],
@@ -794,7 +1200,8 @@ def list_geo_profiles() -> list[dict[str, Any]]:
     ).fetchall()
     conn.close()
     profiles_by_code = {row["geo_code"]: dict(row) for row in rows}
-    return [profiles_by_code.get(geo_code, get_geo_profile(geo_code)) for geo_code in SUPPORTED_GEOS]
+    codes = sorted(set(profiles_by_code.keys()) | set(DEFAULT_GEO_CONFIGS.keys()) | set(list_geo_codes_with_requisites()))
+    return [profiles_by_code.get(geo_code, get_geo_profile(geo_code)) for geo_code in codes]
 
 
 def get_geo_manager_by_id(geo_code: str, manager_id: int | None) -> dict[str, Any] | None:
@@ -954,35 +1361,21 @@ def save_geo_manager(payload: ManagerPayload) -> dict[str, Any]:
     return resolve_manager_for_geo(safe_geo, saved_manager_id)
 
 
-def get_active_requisites(geo_code: str) -> dict[str, Any]:
+def get_active_requisites(geo_code: str) -> dict[str, Any] | None:
     safe_geo = sanitize_geo_code(geo_code) or "ES"
     conn = get_connection()
     row = conn.execute(
         """
-        SELECT id, geo_code, bank_name, card_number, bic_swift, receiver_name, created_at
+        SELECT id, geo_code, sequence_number, bank_name, card_number, bic_swift, receiver_name, created_at
         FROM geo_requisites
         WHERE geo_code = ?
-        ORDER BY id DESC
+        ORDER BY sequence_number ASC, id ASC
         LIMIT 1
         """,
         (safe_geo,),
     ).fetchone()
     conn.close()
-    if row:
-        return dict(row)
-
-    fallback_conn = get_connection()
-    defaults = legacy_seed_requisites(fallback_conn)
-    fallback_conn.close()
-    return {
-        "id": None,
-        "geo_code": safe_geo,
-        "bank_name": defaults["bank_name"],
-        "card_number": defaults["card_number"],
-        "bic_swift": defaults["bic_swift"],
-        "receiver_name": defaults["receiver_name"],
-        "created_at": utc_now_iso(),
-    }
+    return dict(row) if row else None
 
 
 def get_geo_requisites_by_id(geo_code: str, requisites_id: int | None) -> dict[str, Any] | None:
@@ -992,7 +1385,7 @@ def get_geo_requisites_by_id(geo_code: str, requisites_id: int | None) -> dict[s
     conn = get_connection()
     row = conn.execute(
         """
-        SELECT id, geo_code, bank_name, card_number, bic_swift, receiver_name, created_at
+        SELECT id, geo_code, sequence_number, bank_name, card_number, bic_swift, receiver_name, created_at
         FROM geo_requisites
         WHERE geo_code = ? AND id = ?
         LIMIT 1
@@ -1003,7 +1396,7 @@ def get_geo_requisites_by_id(geo_code: str, requisites_id: int | None) -> dict[s
     return dict(row) if row is not None else None
 
 
-def resolve_requisites_for_geo(geo_code: str, requisites_id: int | None = None) -> dict[str, Any]:
+def resolve_requisites_for_geo(geo_code: str, requisites_id: int | None = None) -> dict[str, Any] | None:
     chosen = get_geo_requisites_by_id(geo_code, requisites_id)
     if chosen is not None:
         return chosen
@@ -1015,20 +1408,20 @@ def list_geo_snapshots() -> list[dict[str, Any]]:
         {
             "profile": get_geo_profile(geo_code),
             "active_requisites": get_active_requisites(geo_code),
-            "default_manager": get_default_manager_for_geo(geo_code),
-            "managers": list_geo_managers(geo_code),
+            "requisites_count": len(list_geo_requisites_history_for_geo(geo_code, limit=1000)),
+            "has_requisites": geo_has_requisites(geo_code),
         }
-        for geo_code in SUPPORTED_GEOS
+        for geo_code in [profile["geo_code"] for profile in list_geo_profiles()]
     ]
 
 
-def list_geo_requisites_history(limit: int = 40) -> list[dict[str, Any]]:
+def list_geo_requisites_history(limit: int = 500) -> list[dict[str, Any]]:
     conn = get_connection()
     rows = conn.execute(
         """
-        SELECT id, geo_code, bank_name, card_number, bic_swift, receiver_name, created_at
+        SELECT id, geo_code, sequence_number, bank_name, card_number, bic_swift, receiver_name, created_at
         FROM geo_requisites
-        ORDER BY id DESC
+        ORDER BY geo_code ASC, sequence_number ASC, id ASC
         LIMIT ?
         """,
         (limit,),
@@ -1042,10 +1435,10 @@ def list_geo_requisites_history_for_geo(geo_code: str, limit: int = 8) -> list[d
     conn = get_connection()
     rows = conn.execute(
         """
-        SELECT id, geo_code, bank_name, card_number, bic_swift, receiver_name, created_at
+        SELECT id, geo_code, sequence_number, bank_name, card_number, bic_swift, receiver_name, created_at
         FROM geo_requisites
         WHERE geo_code = ?
-        ORDER BY id DESC
+        ORDER BY sequence_number ASC, id ASC
         LIMIT ?
         """,
         (safe_geo, limit),
@@ -1055,12 +1448,13 @@ def list_geo_requisites_history_for_geo(geo_code: str, limit: int = 8) -> list[d
 
 
 def save_geo_configuration(geo_code: str, payload: GeoConfigPayload) -> dict[str, Any]:
-    safe_geo = sanitize_geo_code(geo_code)
+    safe_geo = sanitize_geo_code(geo_code, allow_unknown=True)
     if not safe_geo:
-        raise HTTPException(status_code=400, detail="Неподдерживаемый GEO")
+        raise HTTPException(status_code=400, detail="Некорректный GEO-код")
 
-    geo_name = payload.geo_name.strip() or DEFAULT_GEO_CONFIGS[safe_geo]["geo_name"]
-    default_language = sanitize_language_code(payload.default_language) or DEFAULT_GEO_CONFIGS[safe_geo]["default_language"]
+    fallback = build_geo_default_config(safe_geo)
+    geo_name = payload.geo_name.strip() or fallback["geo_name"]
+    default_language = sanitize_language_code(payload.default_language) or fallback["default_language"]
     refresh_minutes = int(payload.refresh_minutes)
     if refresh_minutes < 1 or refresh_minutes > 120:
         raise HTTPException(status_code=400, detail="Таймер должен быть от 1 до 120 минут")
@@ -1071,22 +1465,29 @@ def save_geo_configuration(geo_code: str, payload: GeoConfigPayload) -> dict[str
     conn = get_connection()
     conn.execute(
         """
-        UPDATE geo_profiles
-        SET
-            geo_name = ?,
-            default_language = ?,
-            default_manager_id = ?,
-            refresh_minutes = ?,
-            updated_at = ?
-        WHERE geo_code = ?
+        INSERT INTO geo_profiles (
+            geo_code, geo_name, default_language, manager_name, manager_telegram_url,
+            default_manager_id, refresh_minutes, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(geo_code) DO UPDATE SET
+            geo_name = excluded.geo_name,
+            default_language = excluded.default_language,
+            manager_name = geo_profiles.manager_name,
+            manager_telegram_url = geo_profiles.manager_telegram_url,
+            default_manager_id = excluded.default_manager_id,
+            refresh_minutes = excluded.refresh_minutes,
+            updated_at = excluded.updated_at
         """,
         (
+            safe_geo,
             geo_name,
             default_language,
+            fallback["manager_name"],
+            fallback["manager_telegram_url"],
             default_manager_id,
             refresh_minutes,
             utc_now_iso(),
-            safe_geo,
         ),
     )
     conn.commit()
@@ -1106,7 +1507,7 @@ def update_geo_requisites(
     bic_swift: str,
     receiver_name: str,
 ) -> dict[str, Any]:
-    safe_geo = sanitize_geo_code(geo_code) or "ES"
+    safe_geo = sanitize_geo_code(geo_code, allow_unknown=True) or "ES"
     clean_bank = bank_name.strip()
     clean_card = card_number.strip()
     clean_bic_swift = bic_swift.strip()
@@ -1115,12 +1516,13 @@ def update_geo_requisites(
         raise HTTPException(status_code=400, detail="Нужно указать банк, IBAN и получателя")
 
     conn = get_connection()
+    sequence_number = get_next_requisites_sequence(safe_geo, conn)
     conn.execute(
         """
-        INSERT INTO geo_requisites (geo_code, bank_name, card_number, bic_swift, receiver_name, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO geo_requisites (geo_code, sequence_number, bank_name, card_number, bic_swift, receiver_name, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (safe_geo, clean_bank, clean_card, clean_bic_swift, clean_receiver, utc_now_iso()),
+        (safe_geo, sequence_number, clean_bank, clean_card, clean_bic_swift, clean_receiver, utc_now_iso()),
     )
     conn.commit()
     conn.close()
@@ -1129,12 +1531,13 @@ def update_geo_requisites(
 
 def update_geo_manager(geo_code: str, manager_name: str, manager_telegram_url: str) -> dict[str, Any]:
     safe_geo = sanitize_geo_code(geo_code) or "ES"
+    fallback = build_geo_default_config(safe_geo)
     default_manager = get_default_manager_for_geo(safe_geo)
     saved_manager = save_geo_manager(
         ManagerPayload(
             manager_id=default_manager["id"] if default_manager and default_manager.get("id") else None,
             geo_code=safe_geo,
-            manager_name=manager_name.strip() or DEFAULT_GEO_CONFIGS[safe_geo]["manager_name"],
+            manager_name=manager_name.strip() or fallback["manager_name"],
             manager_telegram_url=manager_telegram_url,
             make_default=True,
         )
@@ -1148,11 +1551,14 @@ def record_visit(
     recommended_language: str,
     geo_code: str,
     payment_amount: float | None,
+    payment_currency: str | None,
     payment_label: str | None,
     payment_comment: str | None,
     manager: dict[str, Any] | None,
     requisites: dict[str, Any] | None,
     request: Request,
+    payment_link_token: str | None = None,
+    payment_link_status: str | None = None,
 ) -> str:
     visit_token = secrets.token_urlsafe(18)
     conn = get_connection()
@@ -1164,9 +1570,10 @@ def record_visit(
             payment_label, referrer, page_path, query_string, created_at, visit_token,
             client_first_name, client_last_name, client_saved_at, requisites_id, manager_id,
             snapshot_manager_name, snapshot_manager_telegram_url,
-            snapshot_bank_name, snapshot_card_number, snapshot_bic_swift, snapshot_receiver_name, payment_comment
+            snapshot_bank_name, snapshot_card_number, snapshot_bic_swift, snapshot_receiver_name, payment_comment,
+            payment_currency, payment_link_token, payment_link_status
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             mode,
@@ -1200,6 +1607,9 @@ def record_visit(
             requisites.get("bic_swift") if requisites else None,
             requisites.get("receiver_name") if requisites else None,
             payment_comment or None,
+            payment_currency or None,
+            payment_link_token or None,
+            payment_link_status or None,
         ),
     )
     conn.commit()
@@ -1218,7 +1628,7 @@ def list_visits(limit: int = 120) -> list[dict[str, Any]]:
             visit_token, client_first_name, client_last_name, client_saved_at, manager_id,
             snapshot_manager_name, snapshot_manager_telegram_url, requisites_id,
             snapshot_bank_name, snapshot_card_number, snapshot_bic_swift, snapshot_receiver_name,
-            payment_comment
+            payment_comment, payment_currency, payment_link_token, payment_link_status
         FROM visits
         ORDER BY id DESC
         LIMIT ?
@@ -1233,13 +1643,312 @@ def list_bot_admins() -> list[dict[str, Any]]:
     conn = get_connection()
     rows = conn.execute(
         """
-        SELECT user_id, username, full_name, role, added_at, added_by
-        FROM bot_admins
-        ORDER BY COALESCE(full_name, ''), user_id
+        SELECT
+            admin.user_id,
+            admin.username,
+            admin.full_name,
+            admin.role,
+            admin.channel_id,
+            admin.added_at,
+            admin.added_by,
+            channels.channel_name,
+            channels.logo_path AS channel_logo_path
+        FROM bot_admins AS admin
+        LEFT JOIN channels
+            ON channels.id = admin.channel_id
+        ORDER BY COALESCE(admin.full_name, ''), admin.user_id
         """
     ).fetchall()
     conn.close()
-    return [dict(row) for row in rows]
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["channel_logo_url"] = channel_logo_public_url(item.get("channel_logo_path"))
+        result.append(item)
+    return result
+
+
+def get_bot_admin_for_login(login_value: str) -> dict[str, Any] | None:
+    raw_value = (login_value or "").strip()
+    if not raw_value:
+        return None
+    normalized_username = raw_value.removeprefix("@").strip().lower()
+    numeric_id = parse_optional_int(raw_value)
+    for item in list_bot_admins():
+        if numeric_id is not None and int(item.get("user_id") or 0) == numeric_id:
+            return item
+        if normalized_username and str(item.get("username") or "").strip().lower() == normalized_username:
+            return item
+    return None
+
+
+def list_bot_users_by_role(role: str) -> list[dict[str, Any]]:
+    safe_role = sanitize_bot_role(role, "handler")
+    return [item for item in list_bot_admins() if sanitize_bot_role(item.get("role"), "handler") == safe_role]
+
+
+def build_handler_contact(user: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not user:
+        return None
+    username = str(user.get("username") or "").strip()
+    if not username:
+        return None
+    full_name = str(user.get("full_name") or "").strip()
+    return {
+        "id": user.get("user_id"),
+        "manager_name": full_name or f"@{username}",
+        "manager_telegram_url": f"https://t.me/{username}",
+        "username": username,
+        "channel_id": user.get("channel_id"),
+        "channel_name": user.get("channel_name") or "",
+        "channel_logo_url": channel_logo_public_url(user.get("channel_logo_url") or user.get("channel_logo_path")),
+    }
+
+
+def list_handler_contacts() -> list[dict[str, Any]]:
+    contacts = [build_handler_contact(item) for item in list_bot_users_by_role("handler")]
+    return [item for item in contacts if item]
+
+
+def get_handler_contact_by_user_id(user_id: int | None) -> dict[str, Any] | None:
+    if user_id is None or user_id <= 0:
+        return None
+    user = next((item for item in list_bot_users_by_role("handler") if int(item.get("user_id") or 0) == int(user_id)), None)
+    return build_handler_contact(user)
+
+
+def get_handler_contact_by_username(username: str | None) -> dict[str, Any] | None:
+    clean_username = extract_telegram_username(username).lower()
+    if not clean_username:
+        return None
+    for item in list_handler_contacts():
+        if str(item.get("username") or "").lower() == clean_username:
+            return item
+    return None
+
+
+def resolve_handler_contact(
+    handler_user_id: int | None = None,
+    raw_handler_link: str | None = None,
+) -> dict[str, Any] | None:
+    by_id = get_handler_contact_by_user_id(handler_user_id)
+    if by_id is not None:
+        return by_id
+    by_username = get_handler_contact_by_username(raw_handler_link)
+    if by_username is not None:
+        return by_username
+    normalized_link = normalize_manager_link(raw_handler_link)
+    if not normalized_link:
+        return None
+    username = extract_telegram_username(normalized_link)
+    return {
+        "id": None,
+        "manager_name": f"@{username}" if username else "Обработчик",
+        "manager_telegram_url": normalized_link,
+        "username": username,
+        "channel_id": None,
+        "channel_name": "",
+        "channel_logo_url": "",
+    }
+
+
+def parse_iso_datetime(raw_value: str | None) -> datetime | None:
+    if not raw_value:
+        return None
+    try:
+        return datetime.fromisoformat(raw_value)
+    except ValueError:
+        return None
+
+
+def build_payment_link_url(link_token: str) -> str:
+    return f"{WEB_URL}/?link={link_token}"
+
+
+def expire_payment_link_if_needed(record: dict[str, Any], conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    expires_at = parse_iso_datetime(record.get("expires_at"))
+    if record.get("status") != "active" or expires_at is None or expires_at > utc_now():
+        return record
+
+    own_conn = False
+    if conn is None:
+        conn = get_connection()
+        own_conn = True
+    expired_at = utc_now_iso()
+    conn.execute(
+        "UPDATE payment_links SET status = 'expired', expired_at = COALESCE(expired_at, ?) WHERE id = ?",
+        (expired_at, record["id"]),
+    )
+    if own_conn:
+        conn.commit()
+    updated = {**record, "status": "expired", "expired_at": record.get("expired_at") or expired_at}
+    if own_conn:
+        conn.close()
+    return updated
+
+
+def get_payment_link_by_token(link_token: str, mark_opened: bool = False) -> dict[str, Any] | None:
+    clean_token = (link_token or "").strip()
+    if not clean_token:
+        return None
+    conn = get_connection()
+    row = conn.execute(
+        """
+        SELECT
+            id, link_token, status, geo_code, requisites_id, handler_user_id,
+            payment_amount, payment_currency, forced_language, payment_label, payment_comment,
+            snapshot_handler_name, snapshot_handler_username, snapshot_handler_telegram_url,
+            snapshot_channel_name, snapshot_channel_logo_url,
+            snapshot_bank_name, snapshot_card_number, snapshot_bic_swift, snapshot_receiver_name,
+            created_by_user_id, creator_role, created_at, expires_at, expired_at, last_opened_at, open_count
+        FROM payment_links
+        WHERE link_token = ?
+        LIMIT 1
+        """,
+        (clean_token,),
+    ).fetchone()
+    if row is None:
+        conn.close()
+        return None
+    record = expire_payment_link_if_needed(dict(row), conn)
+    if mark_opened and record.get("status") == "active":
+        opened_at = utc_now_iso()
+        conn.execute(
+            """
+            UPDATE payment_links
+            SET open_count = COALESCE(open_count, 0) + 1, last_opened_at = ?
+            WHERE id = ?
+            """,
+            (opened_at, record["id"]),
+        )
+        record["open_count"] = int(record.get("open_count") or 0) + 1
+        record["last_opened_at"] = opened_at
+    conn.commit()
+    conn.close()
+    return record
+
+
+def list_payment_links(limit: int = 60) -> list[dict[str, Any]]:
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT
+            id, link_token, status, geo_code, requisites_id, handler_user_id,
+            payment_amount, payment_currency, forced_language, payment_label, payment_comment,
+            snapshot_handler_name, snapshot_handler_username, snapshot_handler_telegram_url,
+            snapshot_channel_name, snapshot_channel_logo_url,
+            snapshot_bank_name, snapshot_card_number, snapshot_bic_swift, snapshot_receiver_name,
+            created_by_user_id, creator_role, created_at, expires_at, expired_at, last_opened_at, open_count
+        FROM payment_links
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        result.append(expire_payment_link_if_needed(dict(row), conn))
+    conn.commit()
+    conn.close()
+    return result
+
+
+def create_payment_link_record(
+    amount: float,
+    geo_code: str,
+    creator_user_id: int | None,
+    creator_role: str | None,
+    currency_code: str | None = None,
+    label: str = "",
+    comment: str = "",
+    forced_language: str | None = None,
+    handler_user_id: int | None = None,
+) -> dict[str, Any]:
+    safe_geo = sanitize_geo_code(geo_code) or "ES"
+    handler = get_handler_contact_by_user_id(handler_user_id)
+    if handler is None or not normalize_manager_link(handler.get("manager_telegram_url")):
+        raise HTTPException(status_code=400, detail="Выберите обработчика с Telegram username")
+    requisites = get_active_requisites(safe_geo)
+    if requisites is None:
+        raise HTTPException(status_code=400, detail=f"Для GEO {safe_geo} не найдено ни одного реквизита")
+
+    profile = get_geo_profile(safe_geo)
+    refresh_minutes = max(1, int(profile.get("refresh_minutes") or DEFAULT_REFRESH_MINUTES))
+    link_token = secrets.token_urlsafe(PAYMENT_LINK_TOKEN_BYTES)
+    created_at = utc_now()
+    expires_at = created_at + timedelta(minutes=refresh_minutes)
+    clean_label = sanitize_payment_label(label)
+    clean_comment = clean_payment_comment(comment)
+    safe_language = sanitize_language_code(forced_language)
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO payment_links (
+            link_token, status, geo_code, requisites_id, handler_user_id,
+            payment_amount, payment_currency, forced_language, payment_label, payment_comment,
+            snapshot_handler_name, snapshot_handler_username, snapshot_handler_telegram_url,
+            snapshot_channel_name, snapshot_channel_logo_url,
+            snapshot_bank_name, snapshot_card_number, snapshot_bic_swift, snapshot_receiver_name,
+            created_by_user_id, creator_role, created_at, expires_at, open_count
+        )
+        VALUES (?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        """,
+        (
+            link_token,
+            safe_geo,
+            requisites.get("id"),
+            handler.get("id"),
+            amount,
+            sanitize_currency_code(currency_code) or DEFAULT_CURRENCY,
+            safe_language,
+            clean_label or None,
+            clean_comment or None,
+            handler.get("manager_name"),
+            handler.get("username"),
+            handler.get("manager_telegram_url"),
+            handler.get("channel_name") or "",
+            handler.get("channel_logo_url") or "",
+            requisites.get("bank_name"),
+            requisites.get("card_number"),
+            requisites.get("bic_swift") or "",
+            requisites.get("receiver_name"),
+            creator_user_id,
+            sanitize_bot_role(creator_role, "handler"),
+            created_at.isoformat(),
+            expires_at.isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return get_payment_link_by_token(link_token) or {}
+
+
+def resolve_payment_link_context(link_token: str) -> dict[str, Any] | None:
+    record = get_payment_link_by_token(link_token, mark_opened=True)
+    if record is None:
+        return None
+    snapshot_handler = {
+        "id": record.get("handler_user_id"),
+        "manager_name": record.get("snapshot_handler_name") or "Обработчик",
+        "manager_telegram_url": record.get("snapshot_handler_telegram_url") or "",
+        "username": record.get("snapshot_handler_username") or "",
+        "channel_name": record.get("snapshot_channel_name") or "",
+        "channel_logo_url": record.get("snapshot_channel_logo_url") or "",
+    }
+    handler = snapshot_handler
+    return {
+        "record": record,
+        "handler": handler,
+        "requisites": {
+            "id": record.get("requisites_id"),
+            "geo_code": record.get("geo_code"),
+            "bank_name": record.get("snapshot_bank_name"),
+            "card_number": record.get("snapshot_card_number"),
+            "bic_swift": record.get("snapshot_bic_swift") or "",
+            "receiver_name": record.get("snapshot_receiver_name"),
+            "created_at": record.get("created_at"),
+        },
+    }
 
 
 def log_bot_activity(
@@ -1407,10 +2116,14 @@ def add_bot_admin(actor_id: int, target_user_id: int) -> bool:
     return True
 
 
-def save_bot_user_role(actor_id: int, target_user_id: int, role: str) -> dict[str, Any]:
+def save_bot_user_role(actor_id: int, target_user_id: int, role: str, channel_id: int | None = None) -> dict[str, Any]:
     safe_role = sanitize_bot_role(role, "handler")
+    safe_channel_id = channel_id if safe_role == "handler" and channel_id and channel_id > 0 else None
     now_value = utc_now_iso()
     conn = get_connection()
+    if safe_channel_id and get_channel_by_id(safe_channel_id, conn) is None:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Выбранный канал не найден")
     existing = conn.execute(
         "SELECT user_id, role FROM bot_admins WHERE user_id = ? LIMIT 1",
         (target_user_id,),
@@ -1424,36 +2137,31 @@ def save_bot_user_role(actor_id: int, target_user_id: int, role: str) -> dict[st
     if existing is None:
         conn.execute(
             """
-            INSERT INTO bot_admins (user_id, username, full_name, role, added_at, added_by)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO bot_admins (user_id, username, full_name, role, channel_id, added_at, added_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (target_user_id, "", "", safe_role, now_value, actor_id),
+            (target_user_id, "", "", safe_role, safe_channel_id, now_value, actor_id),
         )
     else:
         conn.execute(
             """
             UPDATE bot_admins
-            SET role = ?
+            SET role = ?, channel_id = ?
             WHERE user_id = ?
             """,
-            (safe_role, target_user_id),
+            (safe_role, safe_channel_id, target_user_id),
         )
     conn.commit()
-    row = conn.execute(
-        """
-        SELECT user_id, username, full_name, role, added_at, added_by
-        FROM bot_admins
-        WHERE user_id = ?
-        LIMIT 1
-        """,
-        (target_user_id,),
-    ).fetchone()
     conn.close()
-    return dict(row) if row is not None else {
+    row = next((item for item in list_bot_admins() if int(item.get("user_id") or 0) == target_user_id), None)
+    return row if row is not None else {
         "user_id": target_user_id,
         "username": "",
         "full_name": "",
         "role": safe_role,
+        "channel_id": safe_channel_id,
+        "channel_name": get_channel_by_id(safe_channel_id).get("channel_name") if safe_channel_id and get_channel_by_id(safe_channel_id) else "",
+        "channel_logo_url": get_channel_by_id(safe_channel_id).get("logo_url") if safe_channel_id and get_channel_by_id(safe_channel_id) else "",
         "added_at": now_value,
         "added_by": actor_id,
     }
@@ -1535,10 +2243,18 @@ def restore_geo_requisites_from_history(geo_code: str, history_id: int) -> dict[
 
     conn.execute(
         """
-        INSERT INTO geo_requisites (geo_code, bank_name, card_number, bic_swift, receiver_name, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        UPDATE geo_requisites
+        SET sequence_number = COALESCE(sequence_number, 0) + 1
+        WHERE geo_code = ?
         """,
-        (safe_geo, row["bank_name"], row["card_number"], row["bic_swift"], row["receiver_name"], utc_now_iso()),
+        (safe_geo,),
+    )
+    conn.execute(
+        """
+        INSERT INTO geo_requisites (geo_code, sequence_number, bank_name, card_number, bic_swift, receiver_name, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (safe_geo, 1, row["bank_name"], row["card_number"], row["bic_swift"], row["receiver_name"], utc_now_iso()),
     )
     conn.commit()
     conn.close()
@@ -1560,15 +2276,6 @@ def delete_geo_requisites_history_item(geo_code: str, history_id: int) -> dict[s
     if existing is None:
         conn.close()
         raise HTTPException(status_code=404, detail="Реквизиты с таким ID для выбранного GEO не найдены")
-
-    total_row = conn.execute(
-        "SELECT COUNT(*) AS value FROM geo_requisites WHERE geo_code = ?",
-        (safe_geo,),
-    ).fetchone()
-    total_count = int(total_row["value"]) if total_row else 0
-    if total_count <= 1:
-        conn.close()
-        raise HTTPException(status_code=400, detail="Нельзя удалить последний комплект реквизитов для GEO")
 
     conn.execute("DELETE FROM geo_requisites WHERE id = ? AND geo_code = ?", (history_id, safe_geo))
     conn.commit()
@@ -1644,14 +2351,8 @@ def get_summary_stats() -> dict[str, Any]:
     preview_visits = conn.execute("SELECT COUNT(*) AS value FROM visits WHERE mode = 'preview'").fetchone()["value"]
     live_visits = conn.execute("SELECT COUNT(*) AS value FROM visits WHERE mode = 'live'").fetchone()["value"]
     configured_geos = conn.execute("SELECT COUNT(*) AS value FROM geo_profiles").fetchone()["value"]
-    manager_links_configured = conn.execute(
-        """
-        SELECT COUNT(*) AS value
-        FROM geo_profiles gp
-        JOIN geo_managers gm ON gm.id = gp.default_manager_id
-        WHERE gm.manager_telegram_url IS NOT NULL AND TRIM(gm.manager_telegram_url) != ''
-        """
-    ).fetchone()["value"]
+    active_links = conn.execute("SELECT COUNT(*) AS value FROM payment_links WHERE status = 'active'").fetchone()["value"]
+    expired_links = conn.execute("SELECT COUNT(*) AS value FROM payment_links WHERE status = 'expired'").fetchone()["value"]
 
     top_countries_rows = conn.execute(
         """
@@ -1689,19 +2390,52 @@ def get_summary_stats() -> dict[str, Any]:
         "preview_visits": preview_visits,
         "live_visits": live_visits,
         "configured_geos": configured_geos,
-        "manager_links_configured": manager_links_configured,
+        "active_links": active_links,
+        "expired_links": expired_links,
         "top_countries": [{"label": row["label"], "count": row["count_value"]} for row in top_countries_rows],
         "top_languages": [{"label": row["label"], "count": row["count_value"]} for row in top_languages_rows],
         "top_geos": [{"label": row["label"], "count": row["count_value"]} for row in top_geos_rows],
     }
 
 
+def build_admin_dashboard_payload(session: dict[str, Any]) -> dict[str, Any]:
+    role = sanitize_bot_role(session.get("role"), "handler")
+    permissions = web_permissions_for_role(role)
+    payload: dict[str, Any] = {
+        "generated_at": utc_now_iso(),
+        "web_url": WEB_URL,
+        "current_user": {
+            "user_id": session.get("user_id"),
+            "username": session.get("username"),
+            "full_name": session.get("full_name"),
+            "role": role,
+        },
+        "permissions": permissions,
+        "geos": list_geo_snapshots(),
+        "requisites_history": list_geo_requisites_history(),
+        "languages": LANGUAGE_OPTIONS,
+        "currencies": CURRENCY_OPTIONS,
+        "handlers": list_handler_contacts() if bot_role_has_permission(role, "create_link") else [],
+        "bot_users": list_bot_admins() if bot_role_has_permission(role, "manage_access") else [],
+        "bot_roles": BOT_ROLE_OPTIONS if bot_role_has_permission(role, "manage_access") else [],
+        "channels": list_channels() if bot_role_has_permission(role, "manage_access") else [],
+        "stats": get_summary_stats() if role == "admin" else {},
+        "worker_stats": get_worker_stats() if role == "admin" else [],
+        "bot_activity": list_bot_activity() if role == "admin" else [],
+        "visits": list_visits() if role == "admin" else [],
+        "payment_links": list_payment_links() if role == "admin" else [],
+        "bot": get_bot_status() if role == "admin" else {},
+        "db_path": str(DB_FILE) if role == "admin" else "",
+    }
+    return payload
+
+
 def cleanup_sessions() -> None:
     now_value = utc_now()
     expired_tokens = [
         token
-        for token, created_at in ADMIN_SESSIONS.items()
-        if created_at + timedelta(hours=SESSION_TTL_HOURS) < now_value
+        for token, session in ADMIN_SESSIONS.items()
+        if session["created_at"] + timedelta(hours=SESSION_TTL_HOURS) < now_value
     ]
     for token in expired_tokens:
         ADMIN_SESSIONS.pop(token, None)
@@ -1779,18 +2513,61 @@ def use_secure_cookie(request: Request) -> bool:
     return request.url.scheme == "https"
 
 
-def create_admin_session() -> str:
+def build_session_user(bot_user: dict[str, Any] | None, fallback_login: str = "") -> dict[str, Any]:
+    if bot_user:
+        return {
+            "user_id": int(bot_user.get("user_id") or 0),
+            "username": bot_user.get("username") or "",
+            "full_name": bot_user.get("full_name") or "",
+            "role": sanitize_bot_role(bot_user.get("role"), "handler"),
+        }
+    return {
+        "user_id": 0,
+        "username": fallback_login,
+        "full_name": fallback_login or "Admin",
+        "role": "admin",
+    }
+
+
+def resolve_web_login_user(login_value: str) -> dict[str, Any] | None:
+    bot_user = get_bot_admin_for_login(login_value)
+    if bot_user is not None:
+        return build_session_user(bot_user)
+    if ADMIN_USERNAME and secrets.compare_digest(login_value.strip(), ADMIN_USERNAME):
+        return build_session_user(None, fallback_login=ADMIN_USERNAME)
+    return None
+
+
+def create_admin_session(user: dict[str, Any]) -> str:
     cleanup_sessions()
     token = secrets.token_urlsafe(32)
-    ADMIN_SESSIONS[token] = utc_now()
+    ADMIN_SESSIONS[token] = {
+        "created_at": utc_now(),
+        "user_id": int(user.get("user_id") or 0),
+        "username": str(user.get("username") or ""),
+        "full_name": str(user.get("full_name") or ""),
+        "role": sanitize_bot_role(user.get("role"), "admin"),
+    }
     return token
 
 
-def ensure_admin_session(request: Request) -> None:
+def get_admin_session(request: Request) -> dict[str, Any]:
     cleanup_sessions()
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token or token not in ADMIN_SESSIONS:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    return ADMIN_SESSIONS[token]
+
+
+def ensure_admin_session(request: Request) -> dict[str, Any]:
+    return get_admin_session(request)
+
+
+def ensure_admin_permission(request: Request, permission: str) -> dict[str, Any]:
+    session = get_admin_session(request)
+    if not bot_role_has_permission(session.get("role"), permission):
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    return session
 
 
 def extract_client_ip(request: Request) -> str:
@@ -1922,8 +2699,15 @@ def get_selected_geo(context: ContextTypes.DEFAULT_TYPE, user_id: int | None = N
     if selected_geo:
         context.user_data["selected_geo"] = selected_geo
         return selected_geo
-    selected_geo = sanitize_geo_code("ES")
-    return selected_geo or "ES"
+    selected_geo = get_first_available_geo_code()
+    if selected_geo:
+        context.user_data["selected_geo"] = selected_geo
+        return selected_geo
+    fallback = list_known_geo_codes()
+    if fallback:
+        context.user_data["selected_geo"] = fallback[0]
+        return fallback[0]
+    return "ES"
 
 
 def main_keyboard(role: str | None) -> ReplyKeyboardMarkup:
@@ -1932,9 +2716,7 @@ def main_keyboard(role: str | None) -> ReplyKeyboardMarkup:
     if bot_role_has_permission(safe_role, "edit_requisites"):
         rows.append(["📝 Реквизиты", "🗂 История реквизитов"])
         rows.append(["🗑 Удалить реквизит"])
-    if bot_role_has_permission(safe_role, "edit_manager"):
-        rows.append(["👤 Менеджер", "👥 Права доступа"])
-    elif bot_role_has_permission(safe_role, "manage_access"):
+    if bot_role_has_permission(safe_role, "manage_access"):
         rows.append(["👥 Права доступа"])
     if bot_role_has_permission(safe_role, "create_link"):
         rows.append(["🔗 Ссылка на оплату"])
@@ -1948,7 +2730,20 @@ def main_keyboard(role: str | None) -> ReplyKeyboardMarkup:
 
 
 def geo_picker_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup([["ES", "IT"], ["DE", "FR"]], resize_keyboard=True, one_time_keyboard=True)
+    codes = [profile["geo_code"] for profile in list_geo_profiles()]
+    rows = [codes[index:index + 3] for index in range(0, len(codes), 3)] or [["ES"]]
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True)
+
+
+def geo_picker_with_requisites_keyboard() -> ReplyKeyboardMarkup:
+    codes = list_geo_codes_with_requisites()
+    rows = [codes[index:index + 3] for index in range(0, len(codes), 3)] or [["ES"]]
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True)
+
+
+def currency_picker_keyboard() -> ReplyKeyboardMarkup:
+    rows = [[item["code"] for item in CURRENCY_OPTIONS]]
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True)
 
 
 def manager_action_keyboard() -> ReplyKeyboardMarkup:
@@ -1962,19 +2757,20 @@ def manager_action_keyboard() -> ReplyKeyboardMarkup:
 def build_geo_details_text(geo_code: str) -> str:
     profile = get_geo_profile(geo_code)
     requisites = get_active_requisites(geo_code)
-    manager = get_default_manager_for_geo(geo_code)
-    manager_name = manager["manager_name"] if manager and manager.get("manager_name") else "не задан"
-    manager_link = manager["manager_telegram_url"] if manager and manager.get("manager_telegram_url") else "не указан"
-    return (
-        f"GEO: {profile['geo_code']} ({profile['geo_name']})\n"
-        f"Язык по умолчанию: {profile['default_language']}\n"
-        f"Таймер: {profile['refresh_minutes']} мин\n"
-        f"Менеджер по умолчанию: {manager_name}\n"
-        f"Telegram: {manager_link}\n\n"
+    requisites_text = (
         f"Банк: {requisites['bank_name']}\n"
         f"IBAN: {requisites['card_number']}\n"
         f"BIC / SWIFT: {requisites['bic_swift'] or 'не указан'}\n"
         f"Получатель: {requisites['receiver_name']}"
+        if requisites
+        else "Реквизиты: отсутствуют"
+    )
+    return (
+        f"GEO: {profile['geo_code']} ({profile['geo_name']})\n"
+        f"Язык по умолчанию: {profile['default_language']}\n"
+        f"Таймер: {profile['refresh_minutes']} мин\n"
+        f"Обработчик выбирается при создании ссылки.\n\n"
+        f"{requisites_text}"
     )
 
 
@@ -1983,12 +2779,15 @@ def build_geo_overview_text() -> str:
     for snapshot in list_geo_snapshots():
         profile = snapshot["profile"]
         requisites = snapshot["active_requisites"]
-        manager = snapshot.get("default_manager") or {}
-        manager_status = manager.get("manager_name") or "менеджер не задан"
+        requisites_status = (
+            f"{requisites['bank_name']} | {requisites['card_number']} | {requisites['bic_swift'] or 'BIC/SWIFT не указан'} | {requisites['receiver_name']}"
+            if requisites
+            else "Реквизиты отсутствуют"
+        )
         blocks.append(
             f"\n{profile['geo_code']} | {profile['geo_name']} | {profile['default_language']} | "
-            f"таймер {profile['refresh_minutes']} мин | менеджер: {manager_status}\n"
-            f"{requisites['bank_name']} | {requisites['card_number']} | {requisites['bic_swift'] or 'BIC/SWIFT не указан'} | {requisites['receiver_name']}"
+            f"таймер {profile['refresh_minutes']} мин\n"
+            f"{requisites_status}"
         )
     return "\n".join(blocks)
 
@@ -2028,10 +2827,8 @@ def build_help_text(role: str | None, geo_code: str) -> str:
     if bot_role_has_permission(safe_role, "edit_requisites"):
         lines.append("3. Для реквизитов нажмите `📝 Реквизиты`.")
         lines.append("4. История реквизитов открывается кнопкой `🗂 История реквизитов`.")
-    if bot_role_has_permission(safe_role, "edit_manager"):
-        lines.append("5. Для менеджера по умолчанию нажмите `👤 Менеджер`.")
     if bot_role_has_permission(safe_role, "manage_access"):
-        lines.append("6. Права доступа смотрите в `👥 Права доступа`.")
+        lines.append("5. Права доступа смотрите в `👥 Права доступа`.")
     return "\n".join(lines)
 
 
@@ -2055,7 +2852,7 @@ def build_requisites_history_text(geo_code: str, action: str = "restore") -> str
     ]
     for item in items:
         lines.append(
-            f"ID {item['id']} | {item['bank_name']} | {item['card_number']} | {item['bic_swift'] or 'без BIC/SWIFT'} | "
+            f"#{item['sequence_number']} | ID {item['id']} | {item['bank_name']} | {item['card_number']} | {item['bic_swift'] or 'без BIC/SWIFT'} | "
             f"{item['receiver_name']} | {item['created_at']}"
         )
     return "\n".join(lines)
@@ -2077,24 +2874,21 @@ def build_link_requisites_selection_text(geo_code: str) -> str:
 
 
 def build_link_manager_selection_text(geo_code: str) -> str:
-    default_manager = get_default_manager_for_geo(geo_code)
-    items = list_geo_managers(geo_code)
+    items = list_handler_contacts()
     lines = [
         f"Текущий GEO: {geo_code}",
-        "Выберите менеджера для ссылки.",
-        "Отправьте `default` или `-`, чтобы взять менеджера GEO по умолчанию.",
-        "Или отправьте Telegram-ссылку / @username, чтобы подставить свой контакт в эту ссылку.",
+        "Выберите обработчика.",
+        "Отправьте @username обработчика из списка ниже.",
+        "На лендинг попадет именно эта Telegram-ссылка.",
     ]
-    if default_manager and default_manager.get("id"):
-        lines.append(
-            f"По умолчанию: ID {default_manager['id']} | {default_manager['manager_name']} | "
-            f"{default_manager['manager_telegram_url'] or 'без ссылки'}"
-        )
-    lines.append("")
     for item in items:
+        channel_suffix = f" | канал: {item['channel_name']}" if item.get("channel_name") else ""
         lines.append(
-            f"ID {item['id']} | {item['manager_name']} | {item['manager_telegram_url'] or 'без ссылки'}"
+            f"{item['manager_name']} | @{item['username']}{channel_suffix}"
         )
+    if not items:
+        lines.append("")
+        lines.append("Нет ни одного обработчика с username. Администратор должен назначить роль handler и пользователь должен зайти в бота хотя бы один раз.")
     return "\n".join(lines)
 
 
@@ -2102,9 +2896,30 @@ def build_link_language_selection_text() -> str:
     options = ", ".join(item["code"] for item in LANGUAGE_OPTIONS)
     return (
         "Выберите язык лендинга.\n"
-        "Отправьте `auto` или `-`, чтобы оставить автоопределение.\n"
+        f"По умолчанию будет `{DEFAULT_CURRENCY}` только для валюты, а язык выбирается явно.\n"
         f"Доступно: {options}"
     )
+
+
+def build_link_currency_selection_text() -> str:
+    options = ", ".join(f"{item['code']} ({item['label']})" for item in CURRENCY_OPTIONS)
+    return (
+        "Выберите валюту платежа.\n"
+        f"По умолчанию используется {DEFAULT_CURRENCY}.\n"
+        f"Доступно: {options}"
+    )
+
+
+def build_link_geo_selection_text(selected_geo: str | None = None) -> str:
+    available = list_geo_codes_with_requisites()
+    preferred = sanitize_geo_code(selected_geo)
+    lines = [
+        f"Выберите GEO для реквизита. Текущее GEO: {preferred or 'не выбрано'}",
+        "На лендинг подтянется первый доступный комплект реквизитов выбранного GEO.",
+        "",
+        f"Доступные GEO: {', '.join(available) if available else 'нет доступных GEO'}",
+    ]
+    return "\n".join(lines)
 
 
 def requisites_history_keyboard(geo_code: str, action: str = "restore") -> InlineKeyboardMarkup:
@@ -2330,7 +3145,8 @@ async def select_geo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def select_geo_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     geo_code = sanitize_geo_code(update.effective_message.text)
     if not geo_code:
-        await update.effective_message.reply_text("Поддерживаются только ES, IT, DE и FR.")
+        available = ", ".join(profile["geo_code"] for profile in list_geo_profiles())
+        await update.effective_message.reply_text(f"Выберите GEO из списка: {available}")
         return WAITING_GEO_SELECTION
 
     context.user_data["selected_geo"] = geo_code
@@ -2349,6 +3165,13 @@ async def change_reqs_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
     requisites = get_active_requisites(selected_geo)
+    if not requisites:
+        await update.effective_message.reply_text(
+            f"Для GEO {selected_geo} реквизитов пока нет.\n\n"
+            "Отправьте 4 строки в формате:\n"
+            "Банк\nIBAN\nBIC/SWIFT или -\nПолучатель"
+        )
+        return WAITING_REQUISITES
     await update.effective_message.reply_text(
         f"Текущий GEO: {selected_geo}\n"
         f"Банк: {requisites['bank_name']}\n"
@@ -2612,6 +3435,7 @@ async def send_ready_payment_link(
     amount: float,
     user_id: int | None,
     selected_geo: str,
+    currency_code: str | None = None,
     requisites_id: int | None = None,
     manager_id: int | None = None,
     manager_link: str | None = None,
@@ -2619,18 +3443,20 @@ async def send_ready_payment_link(
     clean_label: str = "",
     clean_comment: str = "",
 ) -> int:
-    safe_manager_link = normalize_manager_link(manager_link)
+    handler_contact = resolve_handler_contact(manager_id, manager_link)
     try:
-        link = build_payment_link(
-            amount,
-            selected_geo,
-            clean_label,
-            clean_comment,
+        link_record = create_payment_link_record(
+            amount=amount,
+            geo_code=selected_geo,
+            creator_user_id=user_id,
+            creator_role=get_bot_user_role(user_id),
+            currency_code=currency_code,
+            label=clean_label,
+            comment=clean_comment,
             forced_language=forced_language,
-            requisites_id=requisites_id,
-            manager_id=manager_id,
-            manager_link_override=safe_manager_link,
+            handler_user_id=manager_id,
         )
+        link = build_payment_link_url(str(link_record.get("link_token") or ""))
     except HTTPException as exc:
         await update.effective_message.reply_text(
             str(exc.detail),
@@ -2638,13 +3464,10 @@ async def send_ready_payment_link(
         )
         return ConversationHandler.END
 
-    manager = resolve_manager_for_geo(selected_geo, manager_id)
-    if safe_manager_link:
-        manager = {
-            **manager,
-            "manager_name": manager.get("manager_name") or "персональный контакт",
-            "manager_telegram_url": safe_manager_link,
-        }
+    handler = handler_contact or {
+        "manager_name": "не выбран",
+        "manager_telegram_url": "",
+    }
 
     context.user_data.pop("temp_amount", None)
     context.user_data.pop("temp_requisites_id", None)
@@ -2657,12 +3480,12 @@ async def send_ready_payment_link(
     await update.effective_message.reply_text(
         f"Ссылка готова.\n\n"
         f"GEO: {selected_geo}\n"
-        f"Сумма: {amount:.2f} {DEFAULT_CURRENCY}\n"
-        f"Реквизиты: {requisites_id or 'latest'}\n"
-        f"Менеджер: {manager.get('manager_name') or 'default'}\n"
-        f"Назначение: {clean_label or 'не указано'}\n"
-        f"Комментарий: {clean_comment or 'не указан'}\n"
-        f"Язык: {forced_language or 'auto'}\n"
+        f"Сумма: {amount:.2f} {sanitize_currency_code(currency_code) or DEFAULT_CURRENCY}\n"
+        f"Реквизиты: зафиксирован текущий активный комплект GEO\n"
+        f"Обработчик: {handler.get('manager_name') or 'не выбран'}\n"
+        f"Комментарий для платежа: {clean_label or 'не указан'}\n"
+        f"Комментарий для лендинга: {clean_comment or 'не указан'}\n"
+        f"Язык лендинга: {forced_language or 'auto'}\n"
         f"Ссылка: {link}",
         reply_markup=main_keyboard(get_bot_user_role(user_id)),
     )
@@ -2680,6 +3503,9 @@ async def create_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data.pop("temp_manager_link", None)
     context.user_data.pop("temp_language", None)
     context.user_data.pop("temp_label", None)
+    context.user_data.pop("temp_comment", None)
+    context.user_data.pop("temp_currency", None)
+    context.user_data.pop("temp_geo", None)
     await update.effective_message.reply_text(
         f"Текущий GEO: {selected_geo}\nВведите сумму к оплате, например: 250"
     )
@@ -2695,106 +3521,106 @@ async def create_link_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
     context.user_data["temp_amount"] = amount
-    active_requisites = get_active_requisites(selected_geo)
-    active_requisites_id = active_requisites.get("id")
-    context.user_data["temp_requisites_id"] = active_requisites_id if active_requisites_id else None
-    default_manager = get_default_manager_for_geo(selected_geo) or {}
-    default_manager_id = default_manager.get("id") if default_manager.get("id") else None
-    default_manager_link = normalize_manager_link(default_manager.get("manager_telegram_url"))
-    if default_manager_link:
-        context.user_data["temp_manager_id"] = default_manager_id
-        context.user_data["temp_manager_link"] = ""
-        return await send_ready_payment_link(
-            update,
-            context,
-            amount=amount,
-            user_id=user_id,
-            selected_geo=selected_geo,
-            requisites_id=active_requisites_id if active_requisites_id else None,
-            manager_id=default_manager_id,
-            manager_link="",
-            forced_language=None,
-            clean_label="",
-            clean_comment="",
-        )
-
+    context.user_data["temp_geo"] = selected_geo
     await update.effective_message.reply_text(
-        f"Использую активные реквизиты GEO {selected_geo}: "
-        f"ID {active_requisites_id if active_requisites_id else 'latest'}.\n"
-        "Если нужно выбрать другой ID, сначала активируйте его в `🗂 История реквизитов`.\n"
-        "Менеджер для этого GEO не заполнен, поэтому нужно выбрать его вручную.\n\n"
-        f"{build_link_manager_selection_text(selected_geo)}"
+        build_link_currency_selection_text(),
+        reply_markup=currency_picker_keyboard(),
     )
-    return WAITING_LINK_MANAGER
+    return WAITING_LINK_CURRENCY
+
+
+async def create_link_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    raw_value = update.effective_message.text.strip().upper()
+    currency_code = sanitize_currency_code(raw_value) or (DEFAULT_CURRENCY if raw_value in {"-", "DEFAULT"} else None)
+    if currency_code is None:
+        available = ", ".join(item["code"] for item in CURRENCY_OPTIONS)
+        await update.effective_message.reply_text(f"Нужна одна из валют: {available}")
+        return WAITING_LINK_CURRENCY
+
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = get_selected_geo(context, user_id)
+    context.user_data["temp_currency"] = currency_code
+    await update.effective_message.reply_text(
+        build_link_geo_selection_text(selected_geo),
+        reply_markup=geo_picker_with_requisites_keyboard(),
+    )
+    return WAITING_LINK_REQUISITES
 
 
 async def create_link_requisites(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    raw_value = update.effective_message.text.strip().lower()
-    user_id = update.effective_user.id if update.effective_user else None
-    selected_geo = get_selected_geo(context, user_id)
-    requisites_id: int | None = None
-    if raw_value not in {"-", "latest"}:
-        requisites_id = parse_optional_int(raw_value)
-        if requisites_id is None or get_geo_requisites_by_id(selected_geo, requisites_id) is None:
-            await update.effective_message.reply_text("Нужен `latest` или корректный ID реквизитов.")
-            return WAITING_LINK_REQUISITES
+    geo_code = sanitize_geo_code(update.effective_message.text)
+    if not geo_code or not geo_has_requisites(geo_code):
+        available = ", ".join(list_geo_codes_with_requisites())
+        await update.effective_message.reply_text(
+            f"Нужно выбрать GEO с реквизитами. Доступно: {available}"
+        )
+        return WAITING_LINK_REQUISITES
 
-    context.user_data["temp_requisites_id"] = requisites_id
-    await update.effective_message.reply_text(build_link_manager_selection_text(selected_geo))
-    return WAITING_LINK_MANAGER
+    context.user_data["temp_geo"] = geo_code
+    active_requisites = get_active_requisites(geo_code)
+    if not active_requisites:
+        await update.effective_message.reply_text(
+            f"Для GEO {geo_code} сейчас нет реквизитов."
+        )
+        return WAITING_LINK_REQUISITES
+    context.user_data["temp_requisites_id"] = None
+    await update.effective_message.reply_text(
+        "Введите комментарий для платежа или отправьте - если он не нужен."
+    )
+    return WAITING_LINK_LABEL
 
 
 async def create_link_manager(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw_text = update.effective_message.text.strip()
-    raw_value = raw_text.lower()
-    user_id = update.effective_user.id if update.effective_user else None
-    selected_geo = get_selected_geo(context, user_id)
-    manager_id: int | None = None
-    manager_link = ""
-    if raw_value not in {"-", "default"}:
-        parsed_manager_id = parse_optional_int(raw_value)
-        if parsed_manager_id is not None and get_geo_manager_by_id(selected_geo, parsed_manager_id) is not None:
-            manager_id = parsed_manager_id
-        else:
-            manager_link = normalize_manager_link(raw_text)
-            if not manager_link:
-                await update.effective_message.reply_text(
-                    "Нужен `default`, корректный ID менеджера или Telegram-ссылка вида @username / https://t.me/username."
-                )
-                return WAITING_LINK_MANAGER
+    handler = get_handler_contact_by_username(raw_text)
+    if handler is None:
+        await update.effective_message.reply_text(
+            "Нужно отправить @username обработчика из списка."
+        )
+        return WAITING_LINK_MANAGER
 
-    context.user_data["temp_manager_id"] = manager_id
-    context.user_data["temp_manager_link"] = manager_link
+    context.user_data["temp_manager_id"] = handler.get("id")
+    context.user_data["temp_manager_link"] = handler.get("manager_telegram_url")
     await update.effective_message.reply_text(build_link_language_selection_text())
     return WAITING_LINK_LANGUAGE
 
 
 async def create_link_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw_value = update.effective_message.text.strip().lower()
-    safe_language: str | None = None
-    if raw_value not in {"-", "auto"}:
-        safe_language = sanitize_language_code(raw_value)
-        if not safe_language:
-            available = ", ".join(item["code"] for item in LANGUAGE_OPTIONS)
-            await update.effective_message.reply_text(f"Нужен `auto` или один из кодов: {available}")
-            return WAITING_LINK_LANGUAGE
+    safe_language = sanitize_language_code(raw_value)
+    if not safe_language:
+        available = ", ".join(item["code"] for item in LANGUAGE_OPTIONS)
+        await update.effective_message.reply_text(f"Нужен один из кодов: {available}")
+        return WAITING_LINK_LANGUAGE
 
     context.user_data["temp_language"] = safe_language
-    await update.effective_message.reply_text(
-        "Введите назначение платежа или отправьте - если оно не нужно."
+    amount = float(context.user_data.get("temp_amount", 0))
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = str(context.user_data.get("temp_geo") or get_selected_geo(context, user_id))
+    requisites_id = context.user_data.get("temp_requisites_id")
+    manager_id = context.user_data.get("temp_manager_id")
+    manager_link = normalize_manager_link(context.user_data.get("temp_manager_link"))
+    clean_label = str(context.user_data.get("temp_label", ""))
+    clean_comment = str(context.user_data.get("temp_comment", ""))
+    currency_code = context.user_data.get("temp_currency")
+    return await send_ready_payment_link(
+        update,
+        context,
+        amount=amount,
+        user_id=user_id,
+        selected_geo=selected_geo,
+        currency_code=currency_code,
+        requisites_id=requisites_id,
+        manager_id=manager_id,
+        manager_link=manager_link,
+        forced_language=safe_language,
+        clean_label=clean_label,
+        clean_comment=clean_comment,
     )
-    return WAITING_LINK_LABEL
 
 
 async def create_link_label(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     label = update.effective_message.text.strip()
-    if label != "-" and not payment_label_has_only_latin(label):
-        await update.effective_message.reply_text(
-            "Назначение платежа можно вводить только латиницей, цифрами, пробелом и дефисом.\n"
-            "Пример: service payment или service-payment"
-        )
-        return WAITING_LINK_LABEL
-
     context.user_data["temp_label"] = "" if label == "-" else sanitize_payment_label(label)
     await update.effective_message.reply_text(
         "Введите комментарий для лендинга или отправьте - если он не нужен."
@@ -2803,29 +3629,15 @@ async def create_link_label(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    amount = float(context.user_data.get("temp_amount", 0))
-    user_id = update.effective_user.id if update.effective_user else None
-    selected_geo = get_selected_geo(context, user_id)
-    requisites_id = context.user_data.get("temp_requisites_id")
-    manager_id = context.user_data.get("temp_manager_id")
-    manager_link = normalize_manager_link(context.user_data.get("temp_manager_link"))
-    forced_language = context.user_data.get("temp_language")
-    clean_label = str(context.user_data.get("temp_label", ""))
     comment = update.effective_message.text.strip()
-    clean_comment = "" if comment == "-" else clean_payment_comment(comment)
-    return await send_ready_payment_link(
-        update,
-        context,
-        amount=amount,
-        user_id=user_id,
-        selected_geo=selected_geo,
-        requisites_id=requisites_id,
-        manager_id=manager_id,
-        manager_link=manager_link,
-        forced_language=forced_language,
-        clean_label=clean_label,
-        clean_comment=clean_comment,
+    context.user_data["temp_comment"] = "" if comment == "-" else clean_payment_comment(comment)
+    selected_geo = str(context.user_data.get("temp_geo") or "")
+    await update.effective_message.reply_text(
+        f"Для ссылки будет зафиксирован текущий активный комплект реквизитов GEO {selected_geo}.\n"
+        "Теперь выберите ответственного обработчика.\n\n"
+        f"{build_link_manager_selection_text(selected_geo)}"
     )
+    return WAITING_LINK_MANAGER
 
 
 async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -2855,26 +3667,16 @@ if bot_app is not None:
             MessageHandler(filters.Regex(MENU_BUTTONS_PATTERN), cancel_cmd),
         ],
     )
-    conv_handler_manager = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^👤 Менеджер$"), change_manager_start)],
-        states={
-            WAITING_MANAGER_ACTION: [MessageHandler(conversation_text_filter, change_manager_action)],
-            WAITING_MANAGER: [MessageHandler(conversation_text_filter, change_manager_save)],
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel_cmd),
-            MessageHandler(filters.Regex(MENU_BUTTONS_PATTERN), cancel_cmd),
-        ],
-    )
     conv_handler_link = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🔗 Ссылка на оплату$"), create_link_start)],
         states={
             WAITING_LINK_AMOUNT: [MessageHandler(conversation_text_filter, create_link_amount)],
+            WAITING_LINK_CURRENCY: [MessageHandler(conversation_text_filter, create_link_currency)],
             WAITING_LINK_REQUISITES: [MessageHandler(conversation_text_filter, create_link_requisites)],
-            WAITING_LINK_MANAGER: [MessageHandler(conversation_text_filter, create_link_manager)],
-            WAITING_LINK_LANGUAGE: [MessageHandler(conversation_text_filter, create_link_language)],
             WAITING_LINK_LABEL: [MessageHandler(conversation_text_filter, create_link_label)],
             WAITING_LINK_COMMENT: [MessageHandler(conversation_text_filter, create_link_comment)],
+            WAITING_LINK_MANAGER: [MessageHandler(conversation_text_filter, create_link_manager)],
+            WAITING_LINK_LANGUAGE: [MessageHandler(conversation_text_filter, create_link_language)],
         },
         fallbacks=[
             CommandHandler("cancel", cancel_cmd),
@@ -2899,7 +3701,6 @@ if bot_app is not None:
     bot_app.add_handler(CallbackQueryHandler(requisites_history_callback, pattern=r"^req:"))
     bot_app.add_handler(conv_handler_geo)
     bot_app.add_handler(conv_handler_req)
-    bot_app.add_handler(conv_handler_manager)
     bot_app.add_handler(conv_handler_link)
 
 
@@ -2969,7 +3770,9 @@ async def healthcheck():
 @app.get("/api/landing-context")
 async def landing_context(
     request: Request,
+    link: str | None = None,
     payment: str | None = None,
+    currency: str | None = None,
     geo: str | None = None,
     req: int | None = None,
     mgr: int | None = None,
@@ -2979,32 +3782,92 @@ async def landing_context(
     comment: str | None = None,
 ):
     visitor, browser_language = await build_visitor_context(request)
-    resolved_geo = resolve_geo_code(geo, visitor.get("country_code"), browser_language)
-    profile = get_geo_profile(resolved_geo)
-    manager = resolve_manager_for_geo(resolved_geo, mgr)
-    forced_manager_link = normalize_manager_link(mgr_link)
-    if forced_manager_link:
-        manager = {
-            **manager,
-            "manager_name": manager.get("manager_name") or "personal manager",
-            "manager_telegram_url": forced_manager_link,
-        }
-    payment_amount = parse_payment_amount(payment)
-    payment_label = (label or "").strip()
-    mode = "live" if payment_amount is not None else ("preview" if ALLOW_PREVIEW_MODE else "invalid")
     invalid_reason = ""
-    if mode != "invalid" and not normalize_manager_link(manager.get("manager_telegram_url")):
-        mode = "invalid"
-        invalid_reason = "manager_missing"
-    requisites = resolve_requisites_for_geo(resolved_geo, req) if mode != "invalid" else None
-    refresh_seconds = max(60, int(profile["refresh_minutes"]) * 60) if mode != "invalid" else 0
-    recommended_language = resolve_recommended_language(
-        explicit_language=lang,
-        browser_language=browser_language,
-        country_code=visitor.get("country_code"),
-        geo_default_language=profile.get("default_language"),
-    )
-    payment_comment = clean_payment_comment(comment)
+    payment_link_token = ""
+    payment_link_status = ""
+
+    if link:
+        link_context = resolve_payment_link_context(link)
+        if link_context is None:
+            resolved_geo = resolve_geo_code(geo, visitor.get("country_code"), browser_language)
+            profile = get_geo_profile(resolved_geo)
+            handler = {
+                "id": None,
+                "manager_name": "",
+                "manager_telegram_url": "",
+                "channel_id": None,
+                "channel_name": "",
+                "channel_logo_url": "",
+            }
+            requisites = None
+            payment_amount = None
+            payment_currency = DEFAULT_CURRENCY
+            payment_label = ""
+            payment_comment = ""
+            mode = "invalid"
+            invalid_reason = "link_missing"
+            refresh_seconds = 0
+            recommended_language = resolve_recommended_language(
+                explicit_language=lang,
+                browser_language=browser_language,
+                country_code=visitor.get("country_code"),
+                geo_default_language=profile.get("default_language"),
+            )
+        else:
+            payment_link = link_context["record"]
+            payment_link_token = str(payment_link.get("link_token") or "")
+            payment_link_status = str(payment_link.get("status") or "")
+            resolved_geo = str(payment_link.get("geo_code") or "ES")
+            profile = get_geo_profile(resolved_geo)
+            handler = link_context["handler"]
+            requisites = link_context["requisites"]
+            payment_amount = payment_link.get("payment_amount")
+            payment_currency = sanitize_currency_code(payment_link.get("payment_currency")) or DEFAULT_CURRENCY
+            payment_label = str(payment_link.get("payment_label") or "")
+            payment_comment = str(payment_link.get("payment_comment") or "")
+            recommended_language = resolve_recommended_language(
+                explicit_language=payment_link.get("forced_language"),
+                browser_language=browser_language,
+                country_code=visitor.get("country_code"),
+                geo_default_language=profile.get("default_language"),
+            )
+            expires_at = parse_iso_datetime(payment_link.get("expires_at"))
+            refresh_seconds = max(0, int((expires_at - utc_now()).total_seconds())) if expires_at else 0
+            mode = "expired" if payment_link_status == "expired" or refresh_seconds <= 0 else "live"
+            if mode == "expired":
+                invalid_reason = "link_expired"
+                refresh_seconds = 0
+    else:
+        resolved_geo = resolve_geo_code(geo, visitor.get("country_code"), browser_language)
+        profile = get_geo_profile(resolved_geo)
+        handler = resolve_handler_contact(mgr, mgr_link) or {
+            "id": None,
+            "manager_name": "",
+            "manager_telegram_url": "",
+            "channel_id": None,
+            "channel_name": "",
+            "channel_logo_url": "",
+        }
+        payment_amount = parse_payment_amount(payment)
+        payment_currency = sanitize_currency_code(currency) or DEFAULT_CURRENCY
+        payment_label = sanitize_payment_label(label)
+        payment_comment = clean_payment_comment(comment)
+        mode = "live" if payment_amount is not None else ("preview" if ALLOW_PREVIEW_MODE else "invalid")
+        requisites = resolve_requisites_for_geo(resolved_geo, req) if mode != "invalid" else None
+        if mode != "invalid" and requisites is None:
+            mode = "invalid"
+            invalid_reason = "requisites_missing"
+        if mode != "invalid" and not normalize_manager_link(handler.get("manager_telegram_url")):
+            mode = "invalid"
+            invalid_reason = "manager_missing"
+            requisites = None
+        refresh_seconds = max(60, int(profile["refresh_minutes"]) * 60) if mode != "invalid" else 0
+        recommended_language = resolve_recommended_language(
+            explicit_language=lang,
+            browser_language=browser_language,
+            country_code=visitor.get("country_code"),
+            geo_default_language=profile.get("default_language"),
+        )
 
     visit_token = record_visit(
         mode=mode,
@@ -3012,11 +3875,14 @@ async def landing_context(
         recommended_language=recommended_language,
         geo_code=resolved_geo,
         payment_amount=payment_amount,
+        payment_currency=payment_currency,
         payment_label=payment_label or None,
         payment_comment=payment_comment or None,
-        manager=manager,
+        manager=handler,
         requisites=requisites,
         request=request,
+        payment_link_token=payment_link_token or None,
+        payment_link_status=payment_link_status or None,
     )
 
     return {
@@ -3026,7 +3892,7 @@ async def landing_context(
         "available_languages": LANGUAGE_OPTIONS,
         "payment": {
             "amount": payment_amount if payment_amount is not None else (DEFAULT_PREVIEW_AMOUNT if mode == "preview" else None),
-            "currency": DEFAULT_CURRENCY,
+            "currency": payment_currency,
             "label": payment_label,
             "comment": payment_comment,
         },
@@ -3034,14 +3900,15 @@ async def landing_context(
             **profile,
             "refresh_seconds": refresh_seconds,
         },
-        "manager": manager,
+        "handler": handler,
+        "manager": handler,
         "requisites": requisites,
-        "visit": {
-            "token": visit_token,
-            "client_first_name": "",
-            "client_last_name": "",
-        },
+        "visit": {"token": visit_token},
         "visitor": visitor,
+        "link": {
+            "token": payment_link_token,
+            "status": payment_link_status,
+        },
         "timer": {
             "refresh_seconds": refresh_seconds,
             "expires_at": (utc_now() + timedelta(seconds=refresh_seconds)).isoformat() if refresh_seconds else None,
@@ -3051,43 +3918,48 @@ async def landing_context(
 
 @app.post("/api/landing-client")
 async def landing_client(payload: LandingClientPayload):
-    client = save_landing_client(
-        visit_token=payload.visit_token,
-        first_name=payload.first_name,
-        last_name=payload.last_name,
-    )
-    return {"ok": True, "client": client}
+    raise HTTPException(status_code=410, detail="Механика сохранения клиента удалена")
 
 
 @app.get("/api/admin/session")
 async def admin_session(request: Request):
     cleanup_sessions()
     token = request.cookies.get(SESSION_COOKIE_NAME)
+    session = ADMIN_SESSIONS.get(token) if token else None
     return {
-        "authenticated": bool(token and token in ADMIN_SESSIONS),
-        "configured": ADMIN_AUTH_CONFIGURED,
+        "authenticated": bool(session),
+        "configured": bool(ADMIN_PASSWORD),
+        "user": {
+            "user_id": session.get("user_id"),
+            "username": session.get("username"),
+            "full_name": session.get("full_name"),
+            "role": session.get("role"),
+        } if session else None,
+        "permissions": web_permissions_for_role(session.get("role")) if session else [],
     }
 
 
 @app.post("/api/admin/login")
 async def admin_login(payload: AdminLoginPayload, request: Request):
     ensure_admin_request_origin(request)
-    if not ADMIN_AUTH_CONFIGURED:
+    if not ADMIN_PASSWORD:
         raise HTTPException(
             status_code=503,
-            detail="Вход отключен: задайте ADMIN_USERNAME и ADMIN_PASSWORD в переменных окружения.",
+            detail="Вход отключен: задайте ADMIN_PASSWORD в переменных окружения.",
         )
     client_ip = extract_client_ip(request)
     ensure_login_not_rate_limited(client_ip)
-    if not (
-        secrets.compare_digest(payload.username, ADMIN_USERNAME)
-        and secrets.compare_digest(payload.password, ADMIN_PASSWORD)
-    ):
+    login_value = (payload.username or "").strip()
+    if not login_value or not secrets.compare_digest(payload.password, ADMIN_PASSWORD):
         register_failed_login(client_ip)
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+    session_user = resolve_web_login_user(login_value)
+    if session_user is None:
+        register_failed_login(client_ip)
+        raise HTTPException(status_code=401, detail="Пользователь не найден или у него нет роли")
 
     response = JSONResponse({"authenticated": True})
-    session_token = create_admin_session()
+    session_token = create_admin_session(session_user)
     clear_failed_logins(client_ip)
     response.set_cookie(
         SESSION_COOKIE_NAME,
@@ -3103,6 +3975,9 @@ async def admin_login(payload: AdminLoginPayload, request: Request):
 @app.post("/api/admin/logout")
 async def admin_logout(request: Request):
     ensure_admin_request_origin(request)
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if token:
+        ADMIN_SESSIONS.pop(token, None)
     response = JSONResponse({"ok": True})
     response.delete_cookie(SESSION_COOKIE_NAME, samesite="strict")
     return response
@@ -3110,29 +3985,38 @@ async def admin_logout(request: Request):
 
 @app.get("/api/admin/dashboard")
 async def admin_dashboard(request: Request):
-    ensure_admin_session(request)
+    session = ensure_admin_session(request)
+    return build_admin_dashboard_payload(session)
+
+
+@app.post("/api/admin/links")
+async def admin_create_payment_link(payload: CreatePaymentLinkPayload, request: Request):
+    session = ensure_admin_permission(request, "create_link")
+    amount = parse_payment_amount(str(payload.amount))
+    if amount is None:
+        raise HTTPException(status_code=400, detail="Укажите корректную сумму")
+    link_record = create_payment_link_record(
+        amount=amount,
+        geo_code=payload.geo_code,
+        creator_user_id=session.get("user_id"),
+        creator_role=session.get("role"),
+        currency_code=payload.currency_code,
+        label=payload.label,
+        comment=payload.comment,
+        forced_language=payload.language_code,
+        handler_user_id=payload.handler_user_id,
+    )
     return {
-        "generated_at": utc_now_iso(),
-        "web_url": WEB_URL,
-        "db_path": str(DB_FILE),
-        "bot": get_bot_status(),
-        "bot_users": list_bot_admins(),
-        "bot_roles": BOT_ROLE_OPTIONS,
-        "worker_stats": get_worker_stats(),
-        "bot_activity": list_bot_activity(),
-        "stats": get_summary_stats(),
-        "geos": list_geo_snapshots(),
-        "managers": list_geo_managers(),
-        "requisites_history": list_geo_requisites_history(),
-        "visits": list_visits(),
-        "languages": LANGUAGE_OPTIONS,
+        "ok": True,
+        "link": build_payment_link_url(str(link_record.get("link_token") or "")),
+        "payment_link": link_record,
     }
 
 
 @app.post("/api/admin/geos/{geo_code}")
 async def admin_update_geo(geo_code: str, payload: GeoConfigPayload, request: Request):
     ensure_admin_request_origin(request)
-    ensure_admin_session(request)
+    ensure_admin_permission(request, "manage_access")
     snapshot = save_geo_configuration(geo_code, payload)
     return {"ok": True, "geo": snapshot}
 
@@ -3140,9 +4024,10 @@ async def admin_update_geo(geo_code: str, payload: GeoConfigPayload, request: Re
 @app.post("/api/admin/requisites/{geo_code}")
 async def admin_save_requisites(geo_code: str, payload: RequisitesPayload, request: Request):
     ensure_admin_request_origin(request)
-    ensure_admin_session(request)
+    ensure_admin_permission(request, "edit_requisites")
+    target_geo = sanitize_geo_code(payload.geo_code, allow_unknown=True) if payload.geo_code else None
     active_requisites = update_geo_requisites(
-        geo_code,
+        target_geo or geo_code,
         payload.bank_name,
         payload.card_number,
         payload.bic_swift,
@@ -3153,49 +4038,70 @@ async def admin_save_requisites(geo_code: str, payload: RequisitesPayload, reque
 
 @app.post("/api/admin/managers")
 async def admin_save_manager(payload: ManagerPayload, request: Request):
-    ensure_admin_request_origin(request)
-    ensure_admin_session(request)
-    manager = save_geo_manager(payload)
-    return {"ok": True, "manager": manager, "profile": get_geo_profile(payload.geo_code)}
+    raise HTTPException(status_code=410, detail="Модель managers удалена. Используйте роли Telegram-бота")
 
 
 @app.post("/api/admin/bot-users")
 async def admin_save_bot_user(payload: BotUserPayload, request: Request):
     ensure_admin_request_origin(request)
-    ensure_admin_session(request)
+    ensure_admin_permission(request, "manage_access")
     if payload.user_id <= 0:
         raise HTTPException(status_code=400, detail="Нужен корректный Telegram ID")
-    bot_user = save_bot_user_role(0, payload.user_id, payload.role)
+    bot_user = save_bot_user_role(0, payload.user_id, payload.role, payload.channel_id)
     return {"ok": True, "bot_user": bot_user}
 
 
 @app.delete("/api/admin/bot-users/{user_id}")
 async def admin_delete_bot_user(user_id: int, request: Request):
     ensure_admin_request_origin(request)
-    ensure_admin_session(request)
+    ensure_admin_permission(request, "manage_access")
     success, message = remove_bot_admin(user_id)
     if not success:
         raise HTTPException(status_code=400, detail=message)
     return {"ok": True, "message": message}
 
 
+@app.post("/api/admin/channels")
+async def admin_save_channel(
+    request: Request,
+    channel_name: str = Form(...),
+    channel_id: int | None = Form(default=None),
+    remove_logo: bool = Form(default=False),
+    logo: UploadFile | None = File(default=None),
+):
+    ensure_admin_request_origin(request)
+    ensure_admin_permission(request, "manage_access")
+    channel = await save_channel(
+        channel_name=channel_name,
+        channel_id=channel_id,
+        logo_upload=logo,
+        remove_logo=remove_logo,
+    )
+    return {"ok": True, "channel": channel}
+
+
+@app.delete("/api/admin/channels/{channel_id}")
+async def admin_delete_channel(channel_id: int, request: Request):
+    ensure_admin_request_origin(request)
+    ensure_admin_permission(request, "manage_access")
+    return {"ok": True, **delete_channel(channel_id)}
+
+
 @app.post("/api/admin/requisites/{geo_code}/history/{history_id}/activate")
 async def admin_activate_requisites_history(geo_code: str, history_id: int, request: Request):
-    ensure_admin_request_origin(request)
-    ensure_admin_session(request)
-    active_requisites = restore_geo_requisites_from_history(geo_code, history_id)
-    return {"ok": True, "active_requisites": active_requisites}
+    raise HTTPException(status_code=410, detail="Восстановление из истории отключено. Используется только очередь реквизитов")
 
 
 @app.delete("/api/admin/requisites/{geo_code}/history/{history_id}")
 async def admin_delete_requisites_history(geo_code: str, history_id: int, request: Request):
     ensure_admin_request_origin(request)
-    ensure_admin_session(request)
+    ensure_admin_permission(request, "delete_requisites")
     result = delete_geo_requisites_history_item(geo_code, history_id)
     return {"ok": True, **result}
 
 
 STATIC_DIR.mkdir(exist_ok=True)
+CHANNEL_LOGO_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
