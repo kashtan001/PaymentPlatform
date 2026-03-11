@@ -141,8 +141,8 @@
 <body x-data="landingApp()" x-init="init()">
     <div class="mx-auto min-h-screen max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
         <header class="mb-6 flex items-center justify-between gap-3">
-            <div class="surface flex items-center gap-3 rounded-full px-3 py-2 shadow-soft">
-                <div class="brand-logo flex h-11 w-11 items-center justify-center rounded-full text-sm font-semibold text-white">
+            <div class="surface flex flex-col items-center justify-center gap-2 rounded-full px-4 py-3 shadow-soft min-w-[140px]">
+                <div class="brand-logo flex h-11 w-11 items-center justify-center rounded-full text-sm font-semibold text-white shrink-0">
                     <template x-if="hasChannelLogo()">
                         <img :src="channelLogoUrl()" :alt="channelDisplayName()" class="h-full w-full object-cover">
                     </template>
@@ -150,10 +150,7 @@
                         <span x-text="channelInitial()"></span>
                     </template>
                 </div>
-                <div>
-                    <p class="text-[11px] uppercase tracking-[0.28em] text-slate-400" x-text="channelDisplayName()"></p>
-                    <p class="text-sm font-semibold text-slate-900">Pay</p>
-                </div>
+                <p class="text-sm font-semibold text-slate-900 text-center" x-text="channelDisplayName()"></p>
             </div>
 
             <button type="button" @click="showLanguages = true" class="surface rounded-full px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
@@ -655,11 +652,10 @@
 
                     const queryParams = new URLSearchParams(window.location.search);
                     const queryLang = queryParams.get("lang");
-                    const explicitGeo = queryParams.get("geo");
                     const storedLang = window.localStorage.getItem("dream-team-language");
-                    const initialLanguage = explicitGeo
-                        ? this.resolveLanguageCode(queryLang || this.recommendedLanguage || "en")
-                        : this.resolveLanguageCode(queryLang || storedLang || this.recommendedLanguage || "en");
+                    const initialLanguage = this.resolveLanguageCode(
+                        queryLang || this.recommendedLanguage || storedLang || "en"
+                    );
                     this.applyLanguage(initialLanguage);
 
                     this.restartCountdown(Number(context.timer?.refresh_seconds || this.geo.refresh_seconds || 0));
@@ -747,7 +743,7 @@
                 },
 
                 channelDisplayName() {
-                    return String(this.manager.channel_name || this.manager.manager_name || "Dream Team").trim() || "Dream Team";
+                    return String(this.manager.channel_name || "Dream Team").trim() || "Dream Team";
                 },
 
                 channelInitial() {

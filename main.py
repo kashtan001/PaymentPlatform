@@ -1,3 +1,4 @@
+import hashlib
 import ipaddress
 import os
 import re
@@ -258,6 +259,12 @@ class BotUserPayload(BaseModel):
     user_id: int
     role: str
     channel_id: int | None = None
+
+
+class WebAdminUserPayload(BaseModel):
+    login: str
+    password: str
+    role: str
 
 
 class CreatePaymentLinkPayload(BaseModel):
@@ -1060,6 +1067,23 @@ def init_db() -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS web_admin_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            login TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'handler',
+            created_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_web_admin_users_login
+        ON web_admin_users (login)
+        """
+    )
 
     ensure_column(conn, "visits", "geo_code", "TEXT")
     ensure_column(conn, "visits", "payment_amount", "REAL")
@@ -1680,6 +1704,92 @@ def get_bot_admin_for_login(login_value: str) -> dict[str, Any] | None:
         if normalized_username and str(item.get("username") or "").strip().lower() == normalized_username:
             return item
     return None
+
+
+def _hash_password(password: str, salt: bytes | None = None) -> tuple[str, bytes]:
+    if salt is None:
+        salt = secrets.token_bytes(16)
+    pwd_hash = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100000)
+    return f"{salt.hex()}:{pwd_hash.hex()}", salt
+
+
+def _verify_password(password: str, stored_hash: str) -> bool:
+    try:
+        parts = stored_hash.split(":", 1)
+        if len(parts) != 2:
+            return False
+        salt = bytes.fromhex(parts[0])
+        stored_hash_bytes = bytes.fromhex(parts[1])
+        computed_hash = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100000)
+        return secrets.compare_digest(computed_hash, stored_hash_bytes)
+    except (ValueError, TypeError):
+        return False
+
+
+def get_web_admin_by_login(login_value: str) -> dict[str, Any] | None:
+    raw_value = (login_value or "").strip().lower()
+    if not raw_value:
+        return None
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT id, login, password_hash, role, created_at FROM web_admin_users WHERE LOWER(login) = ? LIMIT 1",
+        (raw_value,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def create_web_admin_user(login: str, password: str, role: str) -> dict[str, Any]:
+    raw_login = (login or "").strip()
+    if not raw_login or len(raw_login) < 2:
+        raise HTTPException(status_code=400, detail="Логин должен содержать минимум 2 символа")
+    if not password or len(password) < 6:
+        raise HTTPException(status_code=400, detail="Пароль должен содержать минимум 6 символов")
+    safe_role = sanitize_bot_role(role, "handler")
+    if safe_role == "admin":
+        raise HTTPException(status_code=400, detail="Создавать пользователей с ролью admin через веб-панель нельзя")
+    password_hash, _ = _hash_password(password)
+    now_value = utc_now_iso()
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO web_admin_users (login, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
+            (raw_login.lower(), password_hash, safe_role, now_value),
+        )
+        conn.commit()
+        row_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Пользователь с таким логином уже существует")
+    row = conn.execute(
+        "SELECT id, login, role, created_at FROM web_admin_users WHERE id = ?",
+        (row_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else {"id": row_id, "login": raw_login, "role": safe_role, "created_at": now_value}
+
+
+def list_web_admin_users() -> list[dict[str, Any]]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT id, login, role, created_at FROM web_admin_users ORDER BY login ASC"
+    ).fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["role_label"] = get_bot_role_label(item.get("role"))
+        result.append(item)
+    return result
+
+
+def delete_web_admin_user(user_id: int) -> bool:
+    conn = get_connection()
+    cursor = conn.execute("DELETE FROM web_admin_users WHERE id = ?", (user_id,))
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
 
 
 def list_bot_users_by_role(role: str) -> list[dict[str, Any]]:
@@ -2426,6 +2536,10 @@ def build_admin_dashboard_payload(session: dict[str, Any]) -> dict[str, Any]:
         "payment_links": list_payment_links() if role == "admin" else [],
         "bot": get_bot_status() if role == "admin" else {},
         "db_path": str(DB_FILE) if role == "admin" else "",
+        "web_users": list_web_admin_users() if role == "admin" else [],
+        "web_role_options": [
+            item for item in BOT_ROLE_OPTIONS if item["code"] != "admin"
+        ] if role == "admin" else [],
     }
     return payload
 
@@ -2529,11 +2643,24 @@ def build_session_user(bot_user: dict[str, Any] | None, fallback_login: str = ""
     }
 
 
-def resolve_web_login_user(login_value: str) -> dict[str, Any] | None:
-    bot_user = get_bot_admin_for_login(login_value)
+def resolve_web_login_user(login_value: str, password: str) -> dict[str, Any] | None:
+    raw_login = (login_value or "").strip()
+    web_user = get_web_admin_by_login(raw_login)
+    if web_user is not None:
+        if _verify_password(password, web_user.get("password_hash") or ""):
+            return {
+                "user_id": -int(web_user.get("id") or 0),
+                "username": web_user.get("login") or raw_login,
+                "full_name": web_user.get("login") or raw_login,
+                "role": sanitize_bot_role(web_user.get("role"), "handler"),
+            }
+        return None
+    if not ADMIN_PASSWORD or not secrets.compare_digest(password, ADMIN_PASSWORD):
+        return None
+    bot_user = get_bot_admin_for_login(raw_login)
     if bot_user is not None:
         return build_session_user(bot_user)
-    if ADMIN_USERNAME and secrets.compare_digest(login_value.strip(), ADMIN_USERNAME):
+    if ADMIN_USERNAME and secrets.compare_digest(raw_login, ADMIN_USERNAME):
         return build_session_user(None, fallback_login=ADMIN_USERNAME)
     return None
 
@@ -3928,7 +4055,7 @@ async def admin_session(request: Request):
     session = ADMIN_SESSIONS.get(token) if token else None
     return {
         "authenticated": bool(session),
-        "configured": bool(ADMIN_PASSWORD),
+        "configured": bool(ADMIN_PASSWORD) or len(list_web_admin_users()) > 0,
         "user": {
             "user_id": session.get("user_id"),
             "username": session.get("username"),
@@ -3942,7 +4069,9 @@ async def admin_session(request: Request):
 @app.post("/api/admin/login")
 async def admin_login(payload: AdminLoginPayload, request: Request):
     ensure_admin_request_origin(request)
-    if not ADMIN_PASSWORD:
+    has_env_auth = bool(ADMIN_PASSWORD)
+    has_web_users = len(list_web_admin_users()) > 0
+    if not has_env_auth and not has_web_users:
         raise HTTPException(
             status_code=503,
             detail="Вход отключен: задайте ADMIN_PASSWORD в переменных окружения.",
@@ -3950,13 +4079,14 @@ async def admin_login(payload: AdminLoginPayload, request: Request):
     client_ip = extract_client_ip(request)
     ensure_login_not_rate_limited(client_ip)
     login_value = (payload.username or "").strip()
-    if not login_value or not secrets.compare_digest(payload.password, ADMIN_PASSWORD):
+    password_value = payload.password or ""
+    if not login_value or not password_value:
         register_failed_login(client_ip)
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
-    session_user = resolve_web_login_user(login_value)
+    session_user = resolve_web_login_user(login_value, password_value)
     if session_user is None:
         register_failed_login(client_ip)
-        raise HTTPException(status_code=401, detail="Пользователь не найден или у него нет роли")
+        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
     response = JSONResponse({"authenticated": True})
     session_token = create_admin_session(session_user)
@@ -4085,6 +4215,24 @@ async def admin_delete_channel(channel_id: int, request: Request):
     ensure_admin_request_origin(request)
     ensure_admin_permission(request, "manage_access")
     return {"ok": True, **delete_channel(channel_id)}
+
+
+@app.post("/api/admin/web-users")
+async def admin_create_web_user(payload: WebAdminUserPayload, request: Request):
+    ensure_admin_request_origin(request)
+    ensure_admin_permission(request, "manage_access")
+    web_user = create_web_admin_user(payload.login, payload.password, payload.role)
+    return {"ok": True, "web_user": web_user}
+
+
+@app.delete("/api/admin/web-users/{user_id}")
+async def admin_delete_web_user(user_id: int, request: Request):
+    ensure_admin_request_origin(request)
+    ensure_admin_permission(request, "manage_access")
+    deleted = delete_web_admin_user(user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    return {"ok": True, "message": "Пользователь удалён"}
 
 
 @app.post("/api/admin/requisites/{geo_code}/history/{history_id}/activate")
