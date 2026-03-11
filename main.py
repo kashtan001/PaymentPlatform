@@ -1078,6 +1078,15 @@ def init_db() -> None:
         )
         """
     )
+    ensure_column(conn, "web_admin_users", "login", "TEXT")
+    ensure_column(conn, "web_admin_users", "password_hash", "TEXT")
+    ensure_column(conn, "web_admin_users", "role", "TEXT")
+    ensure_column(conn, "web_admin_users", "created_at", "TEXT")
+    web_admin_columns = {row["name"] for row in conn.execute("PRAGMA table_info(web_admin_users)")}
+    if "username" in web_admin_columns and "login" in web_admin_columns:
+        conn.execute(
+            "UPDATE web_admin_users SET login = username WHERE (login IS NULL OR login = '') AND username IS NOT NULL"
+        )
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_web_admin_users_login
