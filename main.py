@@ -1,3 +1,4 @@
+import hashlib
 import ipaddress
 import os
 import re
@@ -115,13 +116,22 @@ MANAGER_EDIT_OPTION_LEGACY = "✏️ Изменить имя/ссылку"
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
-ADMIN_AUTH_CONFIGURED = bool(ADMIN_USERNAME and ADMIN_PASSWORD)
+def admin_auth_configured() -> bool:
+    if ADMIN_USERNAME and ADMIN_PASSWORD:
+        return True
+    try:
+        return count_web_admin_users() > 0
+    except Exception:
+        return False
 SESSION_COOKIE_NAME = "payment_admin_session"
 SESSION_TTL_HOURS = 12
 DEFAULT_ADMIN_PANEL_URL = "https://paymentplatform-production-8de8.up.railway.app/admin"
 ADMIN_PANEL_URL = os.getenv("ADMIN_PANEL_URL", DEFAULT_ADMIN_PANEL_URL).strip() or DEFAULT_ADMIN_PANEL_URL
 
-ADMIN_SESSIONS: dict[str, datetime] = {}
+ADMIN_SESSIONS: dict[str, dict[str, Any]] = {}
+WEB_ADMIN_PERMISSIONS = frozenset({"requisites", "bot_roles", "additional", "manage_users"})
+PASSWORD_SALT = os.getenv("WEB_ADMIN_SALT", "payment-platform-admin").encode("utf-8")
+PASSWORD_ITERATIONS = 260000
 GEO_CACHE: dict[str, dict[str, Any]] = {}
 BOT_RUNTIME_STARTED = False
 BOT_RUNTIME_ERROR: str | None = None
@@ -256,6 +266,18 @@ class BotUserPayload(BaseModel):
     user_id: int
     role: str
     channel_id: int | None = None
+
+
+class WebAdminUserCreatePayload(BaseModel):
+    username: str
+    password: str
+    permissions: str = "superadmin"
+
+
+class WebAdminUserUpdatePayload(BaseModel):
+    username: str | None = None
+    password: str | None = None
+    permissions: str | None = None
 
 
 class ChannelPayload(BaseModel):
@@ -868,6 +890,15 @@ def migrate_legacy_geo_managers(conn: sqlite3.Connection) -> None:
         )
 
 
+def hash_password(password: str) -> str:
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        PASSWORD_SALT,
+        PASSWORD_ITERATIONS,
+    ).hex()
+
+
 def seed_bot_admins(conn: sqlite3.Connection) -> None:
     now_value = utc_now_iso()
     for admin_id in sorted(INITIAL_ADMIN_IDS):
@@ -881,8 +912,147 @@ def seed_bot_admins(conn: sqlite3.Connection) -> None:
         )
 
 
+def seed_web_admin_from_env(conn: sqlite3.Connection) -> None:
+    if not ADMIN_USERNAME or not ADMIN_PASSWORD:
+        return
+    count = conn.execute("SELECT COUNT(*) FROM web_admin_users").fetchone()[0]
+    if count > 0:
+        return
+    now_value = utc_now_iso()
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO web_admin_users (username, password_hash, permissions, created_at, updated_at)
+        VALUES (?, ?, 'superadmin', ?, ?)
+        """,
+        (ADMIN_USERNAME, hash_password(ADMIN_PASSWORD), now_value, now_value),
+    )
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    return secrets.compare_digest(hash_password(password), stored_hash)
+
+
+def parse_permissions(permissions_str: str | None) -> frozenset[str]:
+    if not permissions_str or permissions_str.strip() == "superadmin":
+        return WEB_ADMIN_PERMISSIONS
+    return frozenset(p.strip() for p in (permissions_str or "").split(",") if p.strip())
+
+
+def format_permissions(permissions: frozenset[str]) -> str:
+    if permissions == WEB_ADMIN_PERMISSIONS:
+        return "superadmin"
+    return ",".join(sorted(permissions))
+
+
+def get_web_admin_user(username: str) -> dict[str, Any] | None:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT id, username, password_hash, permissions FROM web_admin_users WHERE username = ?",
+        (username.strip(),),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "username": row["username"],
+        "password_hash": row["password_hash"],
+        "permissions": parse_permissions(row["permissions"]),
+    }
+
+
+def count_web_admin_users() -> int:
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM web_admin_users").fetchone()[0]
+    conn.close()
+    return count
+
+
+def list_web_admin_users() -> list[dict[str, Any]]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT id, username, permissions, created_at FROM web_admin_users ORDER BY username"
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "id": r["id"],
+            "username": r["username"],
+            "permissions": format_permissions(parse_permissions(r["permissions"])),
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
+
+
+def create_web_admin_user(username: str, password: str, permissions: str) -> dict[str, Any]:
+    conn = get_connection()
+    now = utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO web_admin_users (username, password_hash, permissions, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (username.strip(), hash_password(password), permissions.strip() or "superadmin", now, now),
+    )
+    user_id = int(conn.lastrowid)
+    conn.commit()
+    conn.close()
+    return {"id": user_id, "username": username.strip(), "permissions": permissions or "superadmin"}
+
+
+def update_web_admin_user(user_id: int, username: str | None, password: str | None, permissions: str | None) -> bool:
+    conn = get_connection()
+    updates = []
+    params = []
+    if username is not None:
+        updates.append("username = ?")
+        params.append(username.strip())
+    if password is not None and password:
+        updates.append("password_hash = ?")
+        params.append(hash_password(password))
+    if permissions is not None:
+        updates.append("permissions = ?")
+        params.append(permissions.strip() or "superadmin")
+    if not updates:
+        conn.close()
+        return False
+    updates.append("updated_at = ?")
+    params.append(utc_now_iso())
+    params.append(user_id)
+    cursor = conn.execute(
+        f"UPDATE web_admin_users SET {', '.join(updates)} WHERE id = ?",
+        params,
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def delete_web_admin_user(user_id: int) -> bool:
+    conn = get_connection()
+    cursor = conn.execute("DELETE FROM web_admin_users WHERE id = ?", (user_id,))
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
 def init_db() -> None:
     conn = get_connection()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS web_admin_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            permissions TEXT NOT NULL DEFAULT 'superadmin',
+            created_at TEXT,
+            updated_at TEXT
+        )
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS bot_admins (
@@ -1058,6 +1228,7 @@ def init_db() -> None:
         """
     )
     seed_bot_admins(conn)
+    seed_web_admin_from_env(conn)
     seed_geo_data(conn)
     backfill_geo_requisites_sequence_numbers(conn)
     migrate_legacy_geo_managers(conn)
@@ -2097,8 +2268,8 @@ def cleanup_sessions() -> None:
     now_value = utc_now()
     expired_tokens = [
         token
-        for token, created_at in ADMIN_SESSIONS.items()
-        if created_at + timedelta(hours=SESSION_TTL_HOURS) < now_value
+        for token, data in ADMIN_SESSIONS.items()
+        if data.get("created_at", now_value) + timedelta(hours=SESSION_TTL_HOURS) < now_value
     ]
     for token in expired_tokens:
         ADMIN_SESSIONS.pop(token, None)
@@ -2176,18 +2347,39 @@ def use_secure_cookie(request: Request) -> bool:
     return request.url.scheme == "https"
 
 
-def create_admin_session() -> str:
+def create_admin_session(user_id: int, username: str, permissions: frozenset[str]) -> str:
     cleanup_sessions()
     token = secrets.token_urlsafe(32)
-    ADMIN_SESSIONS[token] = utc_now()
+    ADMIN_SESSIONS[token] = {
+        "user_id": user_id,
+        "username": username,
+        "permissions": permissions,
+        "created_at": utc_now(),
+    }
     return token
 
 
-def ensure_admin_session(request: Request) -> None:
+def get_admin_session(request: Request) -> dict[str, Any] | None:
     cleanup_sessions()
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token or token not in ADMIN_SESSIONS:
+        return None
+    return ADMIN_SESSIONS[token]
+
+
+def ensure_admin_session(request: Request) -> dict[str, Any]:
+    session = get_admin_session(request)
+    if not session:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    return session
+
+
+def require_permission(request: Request, permission: str) -> dict[str, Any]:
+    session = ensure_admin_session(request)
+    perms = session.get("permissions") or frozenset()
+    if permission not in perms:
+        raise HTTPException(status_code=403, detail=f"Нет доступа: требуется право '{permission}'")
+    return session
 
 
 def extract_client_ip(request: Request) -> str:
@@ -3487,33 +3679,51 @@ async def landing_client(payload: LandingClientPayload):
 
 @app.get("/api/admin/session")
 async def admin_session(request: Request):
-    cleanup_sessions()
-    token = request.cookies.get(SESSION_COOKIE_NAME)
+    session = get_admin_session(request)
+    if not session:
+        return {
+            "authenticated": False,
+            "configured": admin_auth_configured(),
+            "current_user": None,
+            "permissions": [],
+        }
+    perms = session.get("permissions") or frozenset()
     return {
-        "authenticated": bool(token and token in ADMIN_SESSIONS),
-        "configured": ADMIN_AUTH_CONFIGURED,
+        "authenticated": True,
+        "configured": admin_auth_configured(),
+        "current_user": {"id": session.get("user_id"), "username": session.get("username")},
+        "permissions": list(perms) if isinstance(perms, frozenset) else perms,
     }
+
+
+def authenticate_admin(username: str, password: str) -> tuple[int, str, frozenset[str]] | None:
+    """Returns (user_id, username, permissions) or None if auth failed."""
+    user = get_web_admin_user(username)
+    if user and verify_password(password, user["password_hash"]):
+        return (user["id"], user["username"], user["permissions"])
+    if ADMIN_USERNAME and ADMIN_PASSWORD and secrets.compare_digest(username, ADMIN_USERNAME) and secrets.compare_digest(password, ADMIN_PASSWORD):
+        return (0, ADMIN_USERNAME, WEB_ADMIN_PERMISSIONS)
+    return None
 
 
 @app.post("/api/admin/login")
 async def admin_login(payload: AdminLoginPayload, request: Request):
     ensure_admin_request_origin(request)
-    if not ADMIN_AUTH_CONFIGURED:
+    if not admin_auth_configured():
         raise HTTPException(
             status_code=503,
-            detail="Вход отключен: задайте ADMIN_USERNAME и ADMIN_PASSWORD в переменных окружения.",
+            detail="Вход отключен: задайте ADMIN_USERNAME и ADMIN_PASSWORD в переменных окружения или создайте пользователей в админке.",
         )
     client_ip = extract_client_ip(request)
     ensure_login_not_rate_limited(client_ip)
-    if not (
-        secrets.compare_digest(payload.username, ADMIN_USERNAME)
-        and secrets.compare_digest(payload.password, ADMIN_PASSWORD)
-    ):
+    auth_result = authenticate_admin(payload.username, payload.password)
+    if not auth_result:
         register_failed_login(client_ip)
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
+    user_id, username, permissions = auth_result
     response = JSONResponse({"authenticated": True})
-    session_token = create_admin_session()
+    session_token = create_admin_session(user_id, username, permissions)
     clear_failed_logins(client_ip)
     response.set_cookie(
         SESSION_COOKIE_NAME,
@@ -3536,30 +3746,41 @@ async def admin_logout(request: Request):
 
 @app.get("/api/admin/dashboard")
 async def admin_dashboard(request: Request):
-    ensure_admin_session(request)
-    return {
+    session = ensure_admin_session(request)
+    perms = session.get("permissions") or frozenset()
+    permissions_list = list(perms) if isinstance(perms, frozenset) else perms
+    payload = {
         "generated_at": utc_now_iso(),
         "web_url": WEB_URL,
-        "db_path": str(DB_FILE),
-        "bot": get_bot_status(),
-        "bot_users": list_bot_admins(),
-        "bot_roles": BOT_ROLE_OPTIONS,
-        "worker_stats": get_worker_stats(),
-        "bot_activity": list_bot_activity(),
-        "stats": get_summary_stats(),
+        "current_user": {"id": session.get("user_id"), "username": session.get("username")},
+        "permissions": permissions_list,
         "geos": list_geo_snapshots(),
         "managers": list_geo_managers(),
-        "requisites_history": list_geo_requisites_history(),
-        "visits": list_visits(),
         "languages": LANGUAGE_OPTIONS,
-        "channels": list_channels(),
     }
+    if "requisites" in perms:
+        payload["requisites_history"] = list_geo_requisites_history()
+    if "bot_roles" in perms:
+        payload["bot"] = get_bot_status()
+        payload["bot_users"] = list_bot_admins()
+        payload["bot_roles"] = BOT_ROLE_OPTIONS
+        payload["channels"] = list_channels()
+    if "additional" in perms:
+        payload["db_path"] = str(DB_FILE)
+        payload["worker_stats"] = get_worker_stats()
+        payload["bot_activity"] = list_bot_activity()
+        payload["stats"] = get_summary_stats()
+        payload["visits"] = list_visits()
+    if "manage_users" in perms:
+        payload["web_users"] = list_web_admin_users()
+        payload["permission_options"] = list(WEB_ADMIN_PERMISSIONS)
+    return payload
 
 
 @app.post("/api/admin/geos/{geo_code}")
 async def admin_update_geo(geo_code: str, payload: GeoConfigPayload, request: Request):
     ensure_admin_request_origin(request)
-    ensure_admin_session(request)
+    require_permission(request, "additional")
     snapshot = save_geo_configuration(geo_code, payload)
     return {"ok": True, "geo": snapshot}
 
@@ -3567,7 +3788,7 @@ async def admin_update_geo(geo_code: str, payload: GeoConfigPayload, request: Re
 @app.post("/api/admin/requisites/{geo_code}")
 async def admin_save_requisites(geo_code: str, payload: RequisitesPayload, request: Request):
     ensure_admin_request_origin(request)
-    ensure_admin_session(request)
+    require_permission(request, "requisites")
     target_geo = sanitize_geo_code(payload.geo_code, allow_unknown=True) if payload.geo_code else None
     active_requisites = update_geo_requisites(
         target_geo or geo_code,
@@ -3582,7 +3803,7 @@ async def admin_save_requisites(geo_code: str, payload: RequisitesPayload, reque
 @app.post("/api/admin/managers")
 async def admin_save_manager(payload: ManagerPayload, request: Request):
     ensure_admin_request_origin(request)
-    ensure_admin_session(request)
+    require_permission(request, "additional")
     manager = save_geo_manager(payload)
     return {"ok": True, "manager": manager, "profile": get_geo_profile(payload.geo_code)}
 
@@ -3590,7 +3811,7 @@ async def admin_save_manager(payload: ManagerPayload, request: Request):
 @app.post("/api/admin/bot-users")
 async def admin_save_bot_user(payload: BotUserPayload, request: Request):
     ensure_admin_request_origin(request)
-    ensure_admin_session(request)
+    require_permission(request, "bot_roles")
     if payload.user_id <= 0:
         raise HTTPException(status_code=400, detail="Нужен корректный Telegram ID")
     bot_user = save_bot_user_role(0, payload.user_id, payload.role, payload.channel_id)
@@ -3600,7 +3821,7 @@ async def admin_save_bot_user(payload: BotUserPayload, request: Request):
 @app.delete("/api/admin/bot-users/{user_id}")
 async def admin_delete_bot_user(user_id: int, request: Request):
     ensure_admin_request_origin(request)
-    ensure_admin_session(request)
+    require_permission(request, "bot_roles")
     success, message = remove_bot_admin(user_id)
     if not success:
         raise HTTPException(status_code=400, detail=message)
@@ -3616,7 +3837,7 @@ async def admin_save_channel(
     logo: UploadFile | None = File(default=None),
 ):
     ensure_admin_request_origin(request)
-    ensure_admin_session(request)
+    require_permission(request, "bot_roles")
     channel = await save_channel(
         channel_name=channel_name,
         channel_id=channel_id,
@@ -3629,14 +3850,14 @@ async def admin_save_channel(
 @app.delete("/api/admin/channels/{channel_id}")
 async def admin_delete_channel(channel_id: int, request: Request):
     ensure_admin_request_origin(request)
-    ensure_admin_session(request)
+    require_permission(request, "bot_roles")
     return {"ok": True, **delete_channel(channel_id)}
 
 
 @app.post("/api/admin/requisites/{geo_code}/history/{history_id}/activate")
 async def admin_activate_requisites_history(geo_code: str, history_id: int, request: Request):
     ensure_admin_request_origin(request)
-    ensure_admin_session(request)
+    require_permission(request, "requisites")
     active_requisites = restore_geo_requisites_from_history(geo_code, history_id)
     return {"ok": True, "active_requisites": active_requisites}
 
@@ -3644,9 +3865,66 @@ async def admin_activate_requisites_history(geo_code: str, history_id: int, requ
 @app.delete("/api/admin/requisites/{geo_code}/history/{history_id}")
 async def admin_delete_requisites_history(geo_code: str, history_id: int, request: Request):
     ensure_admin_request_origin(request)
-    ensure_admin_session(request)
+    require_permission(request, "requisites")
     result = delete_geo_requisites_history_item(geo_code, history_id)
     return {"ok": True, **result}
+
+
+@app.get("/api/admin/web-users")
+async def admin_list_web_users(request: Request):
+    ensure_admin_request_origin(request)
+    require_permission(request, "manage_users")
+    return {"users": list_web_admin_users()}
+
+
+@app.post("/api/admin/web-users")
+async def admin_create_web_user(payload: WebAdminUserCreatePayload, request: Request):
+    ensure_admin_request_origin(request)
+    require_permission(request, "manage_users")
+    if not payload.username.strip():
+        raise HTTPException(status_code=400, detail="Укажите логин")
+    if len(payload.password) < 6:
+        raise HTTPException(status_code=400, detail="Пароль должен быть не менее 6 символов")
+    try:
+        user = create_web_admin_user(
+            payload.username.strip(),
+            payload.password,
+            payload.permissions.strip() or "superadmin",
+        )
+        return {"ok": True, "user": user}
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="Пользователь с таким логином уже существует")
+
+
+@app.patch("/api/admin/web-users/{user_id}")
+async def admin_update_web_user(user_id: int, payload: WebAdminUserUpdatePayload, request: Request):
+    ensure_admin_request_origin(request)
+    require_permission(request, "manage_users")
+    if payload.username is not None and not payload.username.strip():
+        raise HTTPException(status_code=400, detail="Логин не может быть пустым")
+    if payload.password is not None and len(payload.password) < 6:
+        raise HTTPException(status_code=400, detail="Пароль должен быть не менее 6 символов")
+    try:
+        updated = update_web_admin_user(
+            user_id,
+            payload.username.strip() if payload.username else None,
+            payload.password,
+            payload.permissions.strip() if payload.permissions else None,
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail="Пользователь не найден")
+        return {"ok": True}
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="Пользователь с таким логином уже существует")
+
+
+@app.delete("/api/admin/web-users/{user_id}")
+async def admin_delete_web_user(user_id: int, request: Request):
+    ensure_admin_request_origin(request)
+    require_permission(request, "manage_users")
+    if not delete_web_admin_user(user_id):
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    return {"ok": True}
 
 
 STATIC_DIR.mkdir(exist_ok=True)
