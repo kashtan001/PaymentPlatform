@@ -185,7 +185,25 @@
                 </div>
             </section>
 
-            <section x-show="!loading && mode !== 'invalid'" x-cloak id="payment-shell" class="surface rounded-[2rem] p-4 shadow-shell sm:p-6 lg:p-8">
+            <section x-show="!loading && mode === 'expired'" x-cloak id="payment-shell" class="surface mx-auto max-w-2xl rounded-[2rem] p-6 shadow-shell sm:p-8">
+                <div class="mx-auto max-w-xl text-center">
+                    <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-red-50 text-red-500">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                    </div>
+                    <h1 class="mt-6 text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl" x-text="copy.expiredTitle || 'Time expired'"></h1>
+                    <p class="mt-4 text-base leading-7 text-slate-600" x-text="copy.expiredText || 'Request a new payment link.'"></p>
+                    <div class="mt-8 flex flex-wrap justify-center gap-3">
+                        <a x-show="hasManagerLink()" x-cloak :href="managerUrl()" target="_blank" rel="noreferrer"
+                           class="inline-flex items-center justify-center rounded-full bg-[var(--accent)] px-6 py-3 text-sm font-semibold text-white transition hover:bg-[var(--accent-dark)]">
+                            <span x-text="copy.managerButton"></span>
+                        </a>
+                    </div>
+                </div>
+            </section>
+
+            <section x-show="!loading && mode !== 'invalid' && mode !== 'expired'" x-cloak id="payment-shell" class="surface rounded-[2rem] p-4 shadow-shell sm:p-6 lg:p-8">
                 <div class="surface-soft rounded-[1.75rem] p-5 sm:p-6 lg:p-8">
                     <div class="flex flex-wrap items-center justify-between gap-3">
                         <div>
@@ -351,8 +369,6 @@
             ? window.location.origin
             : "http://127.0.0.1:8000";
 
-        const CLIENT_STORAGE_KEY = "dream-team-payment-client";
-
         const localeMap = {
             en: "en-GB",
             es: "es-ES",
@@ -383,23 +399,14 @@
                 missingManagerText: "This payment link cannot be used yet because no Telegram contact is configured.",
                 missingRequisitesTitle: "This payment page is unavailable",
                 missingRequisitesText: "There are currently no payment details configured for this GEO.",
+                expiredTitle: "Time expired",
+                expiredText: "This payment link is no longer active. Request a new payment link.",
                 bankTransfer: "Bank transfer",
                 paymentPurpose: "Payment purpose",
                 paymentComment: "Important!",
                 timerLabel: "Details refresh in",
                 timerLive: "Live",
-                timerText: "When the timer ends, the page will refresh and new payment details will appear.",
-                clientSection: "Payer details",
-                clientTitle: "Enter your first and last name",
-                clientHint: "These details are stored with this payment request.",
-                firstName: "First name",
-                lastName: "Last name",
-                saveClient: "Save and continue",
-                savingClient: "Saving...",
-                savedClient: "Saved for this payment",
-                editButton: "Edit",
-                requiredFields: "Enter both first name and last name.",
-                saveFailed: "Could not save your details. Please try again.",
+                timerText: "When the timer ends, this link becomes inactive. Request a new link.",
                 paymentDetails: "Payment details",
                 paymentDetailsTitle: "Transfer using the details below",
                 paymentDetailsHint: "Copy the bank details exactly as shown on this page.",
@@ -413,8 +420,7 @@
                 afterPaymentHint: "Send the receipt to the Telegram contact after the transfer is complete.",
                 paidAction: "Paid",
                 managerButton: "Open Telegram",
-                managerUnavailable: "Telegram contact link is not configured yet.",
-                saveRequired: "Save your first and last name to enable Telegram contact access."
+                managerUnavailable: "Telegram contact link is not configured yet."
             },
             es: {
                 loading: "Cargando",
@@ -427,23 +433,14 @@
                 missingManagerText: "Este enlace no se puede usar todavia porque no hay un contacto de Telegram configurado.",
                 missingRequisitesTitle: "Esta pagina de pago no esta disponible",
                 missingRequisitesText: "Ahora mismo no hay datos de pago disponibles para este GEO.",
+                expiredTitle: "Tiempo agotado",
+                expiredText: "Este enlace de pago ya no está activo. Solicita un nuevo enlace.",
                 bankTransfer: "Transferencia bancaria",
                 paymentPurpose: "Concepto del pago",
                 paymentComment: "Importante!",
                 timerLabel: "Los datos se actualizaran en",
                 timerLive: "Activo",
-                timerText: "Cuando termine el temporizador, la pagina se recargara y apareceran nuevos datos de pago.",
-                clientSection: "Datos del pagador",
-                clientTitle: "Introduce tu nombre y apellido",
-                clientHint: "Estos datos se guardan junto con esta solicitud de pago.",
-                firstName: "Nombre",
-                lastName: "Apellido",
-                saveClient: "Guardar y continuar",
-                savingClient: "Guardando...",
-                savedClient: "Guardado para este pago",
-                editButton: "Editar",
-                requiredFields: "Introduce nombre y apellido.",
-                saveFailed: "No se pudieron guardar tus datos. Inténtalo de nuevo.",
+                timerText: "Cuando termine el temporizador, este enlace dejará de estar activo. Solicita un nuevo enlace.",
                 paymentDetails: "Datos de pago",
                 paymentDetailsTitle: "Haz la transferencia con estos datos",
                 paymentDetailsHint: "Copia los datos exactamente como aparecen en esta página.",
@@ -457,8 +454,7 @@
                 afterPaymentHint: "Cuando completes la transferencia, envía el comprobante al contacto de Telegram.",
                 paidAction: "Pagado",
                 managerButton: "Abrir Telegram",
-                managerUnavailable: "El enlace del contacto de Telegram aún no está configurado.",
-                saveRequired: "Guarda tu nombre y apellido para activar el acceso al contacto de Telegram."
+                managerUnavailable: "El enlace del contacto de Telegram aún no está configurado."
             },
             it: {
                 loading: "Caricamento",
@@ -471,23 +467,14 @@
                 missingManagerText: "Questo link non puo essere usato finche non viene configurato un contatto Telegram.",
                 missingRequisitesTitle: "Questa pagina di pagamento non e disponibile",
                 missingRequisitesText: "Al momento non ci sono coordinate di pagamento disponibili per questo GEO.",
+                expiredTitle: "Tempo scaduto",
+                expiredText: "Questo link di pagamento non è più attivo. Richiedi un nuovo link.",
                 bankTransfer: "Bonifico bancario",
                 paymentPurpose: "Causale",
                 paymentComment: "Importante!",
                 timerLabel: "I dati si aggiorneranno tra",
                 timerLive: "Attivo",
-                timerText: "Quando il timer termina, la pagina si ricarica e compariranno nuovi dati di pagamento.",
-                clientSection: "Dati del pagatore",
-                clientTitle: "Inserisci nome e cognome",
-                clientHint: "Questi dati vengono salvati insieme a questa richiesta di pagamento.",
-                firstName: "Nome",
-                lastName: "Cognome",
-                saveClient: "Salva e continua",
-                savingClient: "Salvataggio...",
-                savedClient: "Salvato per questo pagamento",
-                editButton: "Modifica",
-                requiredFields: "Inserisci sia nome che cognome.",
-                saveFailed: "Impossibile salvare i dati. Riprova.",
+                timerText: "Quando il timer termina, questo link diventa inattivo. Richiedi un nuovo link.",
                 paymentDetails: "Dettagli di pagamento",
                 paymentDetailsTitle: "Effettua il trasferimento con questi dati",
                 paymentDetailsHint: "Copia i dati esattamente come sono mostrati in questa pagina.",
@@ -501,8 +488,7 @@
                 afterPaymentHint: "Dopo il bonifico, invia la ricevuta al contatto Telegram.",
                 paidAction: "Pagato",
                 managerButton: "Apri Telegram",
-                managerUnavailable: "Il link del contatto Telegram non è ancora configurato.",
-                saveRequired: "Salva nome e cognome per attivare l'accesso al contatto Telegram."
+                managerUnavailable: "Il link del contatto Telegram non è ancora configurato."
             },
             de: {
                 loading: "Wird geladen",
@@ -515,23 +501,14 @@
                 missingManagerText: "Dieser Link kann noch nicht verwendet werden, weil kein Telegram-Kontakt eingerichtet ist.",
                 missingRequisitesTitle: "Diese Zahlungsseite ist nicht verfugbar",
                 missingRequisitesText: "Aktuell sind fur dieses GEO keine Zahlungsdaten verfugbar.",
+                expiredTitle: "Zeit abgelaufen",
+                expiredText: "Dieser Zahlungslink ist nicht mehr aktiv. Fordere einen neuen Zahlungslink an.",
                 bankTransfer: "Banküberweisung",
                 paymentPurpose: "Verwendungszweck",
                 paymentComment: "Wichtig!",
                 timerLabel: "Daten aktualisieren sich in",
                 timerLive: "Aktiv",
-                timerText: "Wenn der Timer endet, wird die Seite neu geladen und es erscheinen neue Zahlungsdaten.",
-                clientSection: "Zahlerdaten",
-                clientTitle: "Vorname und Nachname eingeben",
-                clientHint: "Diese Daten werden zusammen mit dieser Zahlungsanfrage gespeichert.",
-                firstName: "Vorname",
-                lastName: "Nachname",
-                saveClient: "Speichern und fortfahren",
-                savingClient: "Wird gespeichert...",
-                savedClient: "Für diese Zahlung gespeichert",
-                editButton: "Bearbeiten",
-                requiredFields: "Bitte Vorname und Nachname eingeben.",
-                saveFailed: "Deine Daten konnten nicht gespeichert werden. Bitte versuche es erneut.",
+                timerText: "Wenn der Timer endet, wird dieser Link inaktiv. Fordere einen neuen Link an.",
                 paymentDetails: "Zahlungsdaten",
                 paymentDetailsTitle: "Überweise mit den folgenden Daten",
                 paymentDetailsHint: "Kopiere die Daten genau so, wie sie auf dieser Seite stehen.",
@@ -545,8 +522,7 @@
                 afterPaymentHint: "Sende den Beleg nach der Überweisung an den Telegram-Kontakt.",
                 paidAction: "Bezahlt",
                 managerButton: "Telegram öffnen",
-                managerUnavailable: "Der Telegram-Link des Kontakts ist noch nicht eingerichtet.",
-                saveRequired: "Speichere Vorname und Nachname, um den Telegram-Kontakt zu aktivieren."
+                managerUnavailable: "Der Telegram-Link des Kontakts ist noch nicht eingerichtet."
             },
             fr: {
                 loading: "Chargement",
@@ -559,23 +535,14 @@
                 missingManagerText: "Ce lien ne peut pas encore etre utilise car aucun contact Telegram n'est configure.",
                 missingRequisitesTitle: "Cette page de paiement n'est pas disponible",
                 missingRequisitesText: "Aucun detail de paiement n'est actuellement configure pour ce GEO.",
+                expiredTitle: "Temps expiré",
+                expiredText: "Ce lien de paiement n'est plus actif. Demandez un nouveau lien.",
                 bankTransfer: "Virement bancaire",
                 paymentPurpose: "Objet du paiement",
                 paymentComment: "Important !",
                 timerLabel: "Les coordonnees seront actualisees dans",
                 timerLive: "Actif",
-                timerText: "Quand le minuteur se termine, la page se recharge et de nouvelles coordonnees bancaires apparaitront.",
-                clientSection: "Données du payeur",
-                clientTitle: "Saisissez votre prénom et votre nom",
-                clientHint: "Ces données sont enregistrées avec cette demande de paiement.",
-                firstName: "Prénom",
-                lastName: "Nom",
-                saveClient: "Enregistrer et continuer",
-                savingClient: "Enregistrement...",
-                savedClient: "Enregistré pour ce paiement",
-                editButton: "Modifier",
-                requiredFields: "Saisissez le prénom et le nom.",
-                saveFailed: "Impossible d'enregistrer vos données. Veuillez réessayer.",
+                timerText: "Quand le minuteur se termine, ce lien devient inactif. Demandez un nouveau lien.",
                 paymentDetails: "Coordonnées de paiement",
                 paymentDetailsTitle: "Effectuez le virement avec les coordonnées ci-dessous",
                 paymentDetailsHint: "Copiez les coordonnées exactement comme elles apparaissent sur cette page.",
@@ -589,8 +556,7 @@
                 afterPaymentHint: "Une fois le virement effectué, envoyez le reçu au contact Telegram.",
                 paidAction: "Payé",
                 managerButton: "Ouvrir Telegram",
-                managerUnavailable: "Le lien Telegram du contact n'est pas encore configuré.",
-                saveRequired: "Enregistrez votre prénom et votre nom pour activer l'accès au contact Telegram."
+                managerUnavailable: "Le lien Telegram du contact n'est pas encore configuré."
             },
             ro: {
                 loading: "Se încarcă",
@@ -603,23 +569,14 @@
                 missingManagerText: "Acest link nu poate fi folosit încă deoarece nu este configurat niciun contact Telegram.",
                 missingRequisitesTitle: "Această pagină de plată nu este disponibilă",
                 missingRequisitesText: "Momentan nu există detalii de plată configurate pentru acest GEO.",
+                expiredTitle: "Timp expirat",
+                expiredText: "Acest link de plată nu mai este activ. Cere un nou link.",
                 bankTransfer: "Transfer bancar",
                 paymentPurpose: "Detalii plată",
                 paymentComment: "Important!",
                 timerLabel: "Datele se vor actualiza în",
                 timerLive: "Activ",
-                timerText: "Când cronometrul se termină, pagina se va reîncărca și vor apărea noi date de plată.",
-                clientSection: "Date plătitor",
-                clientTitle: "Introduceți numele și prenumele",
-                clientHint: "Aceste date sunt salvate împreună cu această cerere de plată.",
-                firstName: "Prenume",
-                lastName: "Nume",
-                saveClient: "Salvează și continuă",
-                savingClient: "Se salvează...",
-                savedClient: "Salvat pentru această plată",
-                editButton: "Editează",
-                requiredFields: "Introduceți prenumele și numele.",
-                saveFailed: "Nu s-au putut salva datele. Încercați din nou.",
+                timerText: "Când cronometrul se termină, acest link devine inactiv. Cere un nou link.",
                 paymentDetails: "Detalii de plată",
                 paymentDetailsTitle: "Efectuați transferul folosind datele de mai jos",
                 paymentDetailsHint: "Copiați datele bancare exact așa cum apar pe această pagină.",
@@ -633,8 +590,7 @@
                 afterPaymentHint: "După transfer, trimiteți dovada contactului Telegram.",
                 paidAction: "Plătit",
                 managerButton: "Deschide Telegram",
-                managerUnavailable: "Linkul contactului Telegram nu este configurat încă.",
-                saveRequired: "Salvați numele și prenumele pentru a activa accesul la contactul Telegram."
+                managerUnavailable: "Linkul contactului Telegram nu este configurat încă."
             }
         };
 
@@ -655,10 +611,6 @@
                 timeLeftSeconds: 0,
                 availableLanguages: languageCatalog,
                 copy: translations.en,
-                savingClient: false,
-                clientReady: false,
-                editingClient: false,
-                clientError: "",
                 geo: {
                     geo_code: "ES",
                     geo_name: "Spain",
@@ -687,10 +639,6 @@
                     label: "",
                     comment: ""
                 },
-                client: {
-                    first_name: "",
-                    last_name: ""
-                },
 
                 async init() {
                     const context = await this.fetchContext();
@@ -713,11 +661,6 @@
                         ? this.resolveLanguageCode(queryLang || this.recommendedLanguage || "en")
                         : this.resolveLanguageCode(queryLang || storedLang || this.recommendedLanguage || "en");
                     this.applyLanguage(initialLanguage);
-
-                    this.restoreClient();
-                    if (this.mode !== "invalid" && this.hasClientName()) {
-                        await this.submitClient(true);
-                    }
 
                     this.restartCountdown(Number(context.timer?.refresh_seconds || this.geo.refresh_seconds || 0));
                     this.loading = false;
@@ -773,6 +716,9 @@
                 },
 
                 resolvedInvalidTitle() {
+                    if (this.invalidReason === "link_expired") {
+                        return this.copy.expiredTitle;
+                    }
                     if (this.invalidReason === "manager_missing") {
                         return this.copy.missingManagerTitle;
                     }
@@ -783,6 +729,9 @@
                 },
 
                 resolvedInvalidText() {
+                    if (this.invalidReason === "link_expired") {
+                        return this.copy.expiredText;
+                    }
                     if (this.invalidReason === "manager_missing") {
                         return this.copy.missingManagerText;
                     }
@@ -811,96 +760,6 @@
 
                 hasChannelLogo() {
                     return Boolean(this.channelLogoUrl());
-                },
-
-                restoreClient() {
-                    try {
-                        const raw = window.sessionStorage.getItem(CLIENT_STORAGE_KEY);
-                        if (!raw) {
-                            return;
-                        }
-                        const parsed = JSON.parse(raw);
-                        this.client.first_name = this.normalizeName(parsed.first_name);
-                        this.client.last_name = this.normalizeName(parsed.last_name);
-                    } catch (error) {
-                        this.client.first_name = "";
-                        this.client.last_name = "";
-                    }
-                },
-
-                persistClientLocally() {
-                    window.sessionStorage.setItem(CLIENT_STORAGE_KEY, JSON.stringify({
-                        first_name: this.client.first_name,
-                        last_name: this.client.last_name
-                    }));
-                },
-
-                normalizeName(value) {
-                    return String(value || "").replace(/\s+/g, " ").trim().slice(0, 80);
-                },
-
-                hasClientName() {
-                    return Boolean(this.normalizeName(this.client.first_name) && this.normalizeName(this.client.last_name));
-                },
-
-                async submitClient(silent = false) {
-                    const firstName = this.normalizeName(this.client.first_name);
-                    const lastName = this.normalizeName(this.client.last_name);
-
-                    this.client.first_name = firstName;
-                    this.client.last_name = lastName;
-
-                    if (!firstName || !lastName) {
-                        this.clientReady = false;
-                        if (!silent) {
-                            this.clientError = this.copy.requiredFields;
-                        }
-                        return;
-                    }
-
-                    if (!this.visitToken) {
-                        this.clientReady = false;
-                        if (!silent) {
-                            this.clientError = this.copy.saveFailed;
-                        }
-                        return;
-                    }
-
-                    this.savingClient = true;
-                    this.clientError = "";
-                    try {
-                        const response = await fetch(this.apiUrl("/api/landing-client"), {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                visit_token: this.visitToken,
-                                first_name: firstName,
-                                last_name: lastName
-                            })
-                        });
-
-                        const data = await response.json().catch(() => ({}));
-                        if (!response.ok) {
-                            throw new Error(data.detail || "Save failed");
-                        }
-
-                        this.persistClientLocally();
-                        this.clientReady = true;
-                        this.editingClient = false;
-                    } catch (error) {
-                        this.clientReady = false;
-                        if (!silent) {
-                            this.clientError = error.message || this.copy.saveFailed;
-                        }
-                    } finally {
-                        this.savingClient = false;
-                    }
-                },
-
-                editClient() {
-                    this.clientReady = false;
-                    this.editingClient = true;
-                    this.clientError = "";
                 },
 
                 formattedAmount() {
@@ -957,7 +816,10 @@
                         if (this.timeLeftSeconds <= 1) {
                             clearInterval(this.countdownTimerId);
                             this.countdownTimerId = null;
-                            window.location.reload();
+                            this.timeLeftSeconds = 0;
+                            this.showAfterPayment = false;
+                            this.mode = "expired";
+                            this.invalidReason = "link_expired";
                             return;
                         }
                         this.timeLeftSeconds -= 1;

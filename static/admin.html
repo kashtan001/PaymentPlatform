@@ -155,10 +155,10 @@
 
                     <div class="rounded-2xl bg-white/5 px-4 py-4 text-sm text-zinc-300">
                         <p>
-                            Вход: пользователи из базы (создаются в «Дополнительно» → «Пользователи веб-админки») или переменные окружения <span class="font-mono">ADMIN_USERNAME</span> и <span class="font-mono">ADMIN_PASSWORD</span>.
+                            Для входа используются переменные окружения <span class="font-mono">ADMIN_USERNAME</span> и <span class="font-mono">ADMIN_PASSWORD</span>.
                         </p>
                         <p x-show="authConfigured === false" x-cloak class="mt-3 text-amber-300">
-                            Вход отключен, пока не заданы доступы (env или пользователи в БД).
+                            Вход отключен, пока на сервере не заданы безопасные доступы.
                         </p>
                     </div>
 
@@ -186,7 +186,6 @@
                     </div>
 
                     <div class="flex flex-wrap items-center gap-2">
-                        <span x-show="currentUser" x-cloak class="rounded-full bg-white/5 px-4 py-2 text-sm text-zinc-300" x-text="currentUser?.username || ''"></span>
                         <button @click="refreshDashboard()" class="rounded-full bg-white px-4 py-3 text-sm font-semibold text-black">Обновить</button>
                         <button @click="toggleAutorefresh()" class="rounded-full border border-white/10 px-4 py-3 text-sm font-medium text-white">
                             <span x-text="autoRefresh ? 'Автообновление: ВКЛ' : 'Автообновление: ВЫКЛ'"></span>
@@ -196,7 +195,7 @@
                 </div>
             </header>
 
-            <section x-show="hasPermission('requisites')" x-cloak class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+            <section x-show="can('edit_requisites') || isAdmin()" x-cloak class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
                 <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                     <div>
                         <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Geo snapshots</p>
@@ -243,7 +242,7 @@
                 </div>
             </section>
 
-            <div x-show="hasPermission('requisites')" x-cloak class="grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
+            <div x-show="can('edit_requisites') || isAdmin()" x-cloak class="grid gap-5 xl:grid-cols-[1.08fr_0.92fr]">
                 <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
                     <div class="flex items-start justify-between gap-3">
                         <div>
@@ -370,7 +369,7 @@
                 </section>
             </div>
 
-            <section x-show="hasPermission('requisites')" x-cloak class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+            <section class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
                 <div class="flex items-start justify-between gap-3">
                     <div>
                         <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Quick actions</p>
@@ -415,6 +414,14 @@
                                 <input type="text" x-model="linkForm.amount" class="input-shell w-full rounded-2xl px-4 py-4 outline-none" placeholder="250">
                             </label>
                         </div>
+                        <label class="block">
+                            <span class="mb-2 block text-sm text-zinc-400">Валюта</span>
+                            <select x-model="linkForm.currency_code" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
+                                <template x-for="c in currencyOptions()" :key="c.code">
+                                    <option :value="c.code" x-text="c.label + ' (' + c.code + ')'"></option>
+                                </template>
+                            </select>
+                        </label>
                         <div class="grid gap-4 sm:grid-cols-2">
                             <label class="block rounded-[1.5rem] border border-emerald-400/20 bg-emerald-500/10 p-3">
                                 <span class="mb-2 block text-sm text-emerald-100">Язык лендинга</span>
@@ -450,9 +457,10 @@
                             <button type="button" @click="copyText(linkMessage)" class="rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Копировать</button>
                             <button type="button" @click="openLink(linkMessage)" class="rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Открыть</button>
                         </div>
+                </form>
             </section>
 
-            <section x-show="hasPermission('bot_roles')" x-cloak class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+            <section x-show="isAdmin()" x-cloak class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
                 <div>
                     <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Access control</p>
                     <div class="mt-2 panel-title">
@@ -488,7 +496,7 @@
                             </label>
                             <label class="block">
                                 <span class="mb-2 block text-sm text-zinc-400">Логотип</span>
-                                <input type="file" accept=".png,.jpg,.jpeg,.webp,.gif,.svg" @change="handleChannelLogoChange" class="input-shell w-full rounded-2xl px-4 py-3 outline-none file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-black">
+                                <input type="file" accept=".png,.jpg,.jpeg,.webp,.gif" @change="handleChannelLogoChange" class="input-shell w-full rounded-2xl px-4 py-3 outline-none file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-black">
                             </label>
                         </div>
 
@@ -603,7 +611,7 @@
                 </div>
             </section>
 
-            <details x-show="hasPermission('additional')" x-cloak class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
+            <details x-show="isAdmin()" x-cloak class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
                 <summary class="cursor-pointer list-none text-lg font-semibold">
                     Дополнительно
                 </summary>
@@ -634,15 +642,7 @@
                                         </div>
                                     </div>
                                 </div>
-                                <div class="flex flex-wrap items-center gap-2">
-                                    <div class="rounded-full bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-zinc-300" x-text="editingGeoCode"></div>
-                                    <template x-for="geo in geos()" :key="`editor-geo-${geo.profile.geo_code}`">
-                                        <button type="button" @click="selectGeo(geo.profile.geo_code)"
-                                                class="rounded-full px-3 py-1.5 text-xs font-semibold transition"
-                                                :class="editingGeoCode === geo.profile.geo_code ? 'bg-white text-black' : 'border border-white/10 text-zinc-300 hover:bg-white/10'"
-                                                x-text="geo.profile.geo_code"></button>
-                                    </template>
-                                </div>
+                                <div class="rounded-full bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-zinc-300" x-text="editingGeoCode"></div>
                             </div>
 
                             <div class="mt-5 rounded-[1.5rem] border border-emerald-400/20 bg-emerald-500/10 p-4 text-sm text-emerald-50">
@@ -988,52 +988,6 @@
                         </template>
                     </div>
                     </section>
-
-                    <section x-show="hasPermission('manage_users')" x-cloak class="rounded-[2rem] bg-white/5 p-5 sm:p-6">
-                        <div>
-                            <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Web admin</p>
-                            <div class="mt-2 panel-title">
-                                <h2 class="text-xl font-semibold">Пользователи веб-админки</h2>
-                                <div class="info-trigger">
-                                    <button type="button" class="info-button" aria-label="Описание блока пользователей">i</button>
-                                    <div class="info-text">
-                                        Добавление и управление пользователями веб-админки. Права: requisites (реквизиты), bot_roles (роли бота), additional (дополнительно), manage_users (управление пользователями). superadmin = все права.
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <form class="mt-5 space-y-4 rounded-[1.5rem] border border-white/10 bg-black/10 p-4" @submit.prevent="createWebUser">
-                            <div class="grid gap-4 sm:grid-cols-3">
-                                <label class="block">
-                                    <span class="mb-2 block text-sm text-zinc-400">Логин</span>
-                                    <input type="text" x-model="webUserForm.username" class="input-shell w-full rounded-2xl px-4 py-4 outline-none" placeholder="operator">
-                                </label>
-                                <label class="block">
-                                    <span class="mb-2 block text-sm text-zinc-400">Пароль</span>
-                                    <input type="password" x-model="webUserForm.password" class="input-shell w-full rounded-2xl px-4 py-4 outline-none" placeholder="••••••••">
-                                </label>
-                                <label class="block">
-                                    <span class="mb-2 block text-sm text-zinc-400">Права</span>
-                                    <input type="text" x-model="webUserForm.permissions" class="input-shell w-full rounded-2xl px-4 py-4 outline-none" placeholder="superadmin или requisites,bot_roles,additional">
-                                </label>
-                            </div>
-                            <div x-show="webUserMessage" x-cloak class="rounded-2xl bg-white/5 px-4 py-4 text-sm text-zinc-300" x-text="webUserMessage"></div>
-                            <button type="submit" class="rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Добавить пользователя</button>
-                        </form>
-                        <div class="mt-5 space-y-3">
-                            <template x-for="item in dashboard.web_users || []" :key="item.id">
-                                <div class="rounded-[1.4rem] bg-white/5 p-4">
-                                    <div class="flex flex-wrap items-center justify-between gap-3">
-                                        <div>
-                                            <div class="text-sm font-semibold" x-text="item.username"></div>
-                                            <div class="mt-1 text-xs text-zinc-500" x-text="`Права: ${item.permissions}`"></div>
-                                        </div>
-                                        <button type="button" @click="deleteWebUser(item.id)" class="rounded-full border border-red-500/30 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-red-300">Удалить</button>
-                                    </div>
-                                </div>
-                            </template>
-                        </div>
-                    </section>
                 </div>
             </details>
         </section>
@@ -1048,8 +1002,6 @@
                 checkingSession: true,
                 authenticated: false,
                 authConfigured: null,
-                currentUser: null,
-                permissions: [],
                 loggingIn: false,
                 loginError: "",
                 dashboard: {},
@@ -1065,6 +1017,7 @@
                 linkForm: {
                     geo_code: "",
                     amount: "",
+                    currency_code: "EUR",
                     language_code: "auto",
                     handler_user_id: "",
                     label: "",
@@ -1090,14 +1043,6 @@
                     default_language: "en",
                     refresh_minutes: 15
                 },
-                managerMessage: "",
-                managerForm: {
-                    manager_id: "new",
-                    geo_code: "",
-                    manager_name: "",
-                    manager_telegram_url: "",
-                    make_default: true
-                },
                 channelMessage: "",
                 channelForm: {
                     channel_id: "new",
@@ -1112,12 +1057,6 @@
                     role: "handler",
                     channel_id: ""
                 },
-                webUserMessage: "",
-                webUserForm: {
-                    username: "",
-                    password: "",
-                    permissions: "superadmin"
-                },
 
                 async init() {
                     await this.checkSession();
@@ -1126,10 +1065,6 @@
                         this.startAutorefresh();
                     }
                     this.checkingSession = false;
-                },
-
-                hasPermission(perm) {
-                    return Array.isArray(this.permissions) && this.permissions.includes(perm);
                 },
 
                 geos() {
@@ -1142,6 +1077,18 @@
 
                 languageOptions() {
                     return this.dashboard.languages || [];
+                },
+
+                currencyOptions() {
+                    return this.dashboard.currencies || [];
+                },
+
+                isAdmin() {
+                    return this.dashboard.current_user?.role === "admin";
+                },
+
+                can(permission) {
+                    return (this.dashboard.permissions || []).includes(permission);
                 },
 
                 languageLabel(code) {
@@ -1197,10 +1144,6 @@
                     return this.languageLabel(this.linkForm.language_code || "auto");
                 },
 
-                managersForGeo(geoCode) {
-                    return (this.dashboard.managers || []).filter((item) => item.geo_code === geoCode);
-                },
-
                 requisitesForGeo(geoCode) {
                     return (this.dashboard.requisites_history || [])
                         .filter((item) => item.geo_code === geoCode)
@@ -1211,7 +1154,6 @@
                     this.editingGeoCode = code;
                     this.requisitesForm.geo_code = code;
                     this.syncGeoForm();
-                    this.resetManagerForm();
                     this.syncLinkSelections();
                 },
 
@@ -1233,35 +1175,6 @@
                         bic_swift: "",
                         receiver_name: ""
                     };
-                },
-
-                syncManagerForm() {
-                    const currentGeo = this.editingGeoCode;
-                    this.managerForm.geo_code = currentGeo;
-                    const selectedId = String(this.managerForm.manager_id || "new");
-                    if (selectedId === "new") {
-                        this.managerForm.manager_name = "";
-                        this.managerForm.manager_telegram_url = "";
-                        this.managerForm.make_default = true;
-                        return;
-                    }
-                    const manager = this.managersForGeo(currentGeo).find((item) => String(item.id) === selectedId);
-                    if (!manager) {
-                        this.resetManagerForm();
-                        return;
-                    }
-                    this.managerForm.manager_name = manager.manager_name || "";
-                    this.managerForm.manager_telegram_url = manager.manager_telegram_url || "";
-                    this.managerForm.make_default = String(this.geoForm.default_manager_id || "") === String(manager.id);
-                },
-
-                managerOptionLabel(item) {
-                    const parts = [
-                        `ID ${item.id}`,
-                        item.manager_name || "",
-                        item.manager_telegram_url || ""
-                    ].filter(Boolean);
-                    return parts.join(" | ");
                 },
 
                 handlerOptionLabel(item) {
@@ -1311,13 +1224,13 @@
                         const data = await response.json();
                         this.authenticated = Boolean(data.authenticated);
                         this.authConfigured = data.configured !== false;
-                        this.currentUser = data.current_user || null;
-                        this.permissions = data.permissions || [];
+                        if (this.authenticated) {
+                            this.dashboard.current_user = data.user || null;
+                            this.dashboard.permissions = data.permissions || [];
+                        }
                     } catch (error) {
                         this.authenticated = false;
                         this.authConfigured = null;
-                        this.currentUser = null;
-                        this.permissions = [];
                     }
                 },
 
@@ -1353,8 +1266,6 @@
                 async logout() {
                     await fetch(this.apiUrl("/api/admin/logout"), { method: "POST", credentials: "include" });
                     this.authenticated = false;
-                    this.currentUser = null;
-                    this.permissions = [];
                     this.dashboard = {};
                     this.stopAutorefresh();
                 },
@@ -1373,8 +1284,6 @@
 
                         const data = await response.json();
                         this.dashboard = data;
-                        this.currentUser = data.current_user || this.currentUser;
-                        this.permissions = data.permissions || this.permissions;
                         if (!this.currentGeoSnapshot() && this.geos().length) {
                             this.editingGeoCode = this.geos()[0].profile.geo_code;
                         }
@@ -1385,7 +1294,6 @@
                             this.linkForm.geo_code = this.availableGeos()[0].profile.geo_code;
                         }
                         this.syncGeoForm();
-                        this.syncManagerForm();
                         this.syncLinkSelections();
                     } catch (error) {
                         console.error(error);
@@ -1489,68 +1397,6 @@
                     }
                 },
 
-                resetManagerForm() {
-                    this.managerForm = {
-                        manager_id: "new",
-                        geo_code: this.editingGeoCode || "",
-                        manager_name: "",
-                        manager_telegram_url: "",
-                        make_default: true
-                    };
-                    this.managerMessage = "";
-                },
-
-                async saveManager() {
-                    this.managerMessage = "";
-                    try {
-                        const payload = {
-                            manager_id: this.managerForm.manager_id === "new" ? null : Number(this.managerForm.manager_id),
-                            geo_code: this.editingGeoCode,
-                            manager_name: this.managerForm.manager_name,
-                            manager_telegram_url: this.managerForm.manager_telegram_url,
-                            make_default: Boolean(this.managerForm.make_default)
-                        };
-                        const response = await fetch(this.apiUrl("/api/admin/managers"), {
-                            method: "POST",
-                            credentials: "include",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify(payload)
-                        });
-                        const data = await response.json().catch(() => ({}));
-                        if (!response.ok) {
-                            throw new Error(data.detail || "Не удалось сохранить менеджера");
-                        }
-                        this.managerMessage = `Менеджер ${data.manager?.manager_name || ""} сохранён`;
-                        await this.refreshDashboard();
-                        this.geoForm.default_manager_id = data.profile?.default_manager_id ? String(data.profile.default_manager_id) : "";
-                        this.managerForm.manager_id = data.manager?.id ? String(data.manager.id) : "new";
-                        this.syncManagerForm();
-                    } catch (error) {
-                        this.managerMessage = error.message || "Не удалось сохранить менеджера";
-                    }
-                },
-
-                async applyHistoryItem(item) {
-                    if (!item || !item.geo_code) {
-                        return;
-                    }
-                    try {
-                        const response = await fetch(this.apiUrl(`/api/admin/requisites/${item.geo_code}/history/${item.id}/activate`), {
-                            method: "POST",
-                            credentials: "include"
-                        });
-                        const data = await response.json().catch(() => ({}));
-                        if (!response.ok) {
-                            throw new Error(data.detail || "Не удалось активировать реквизиты");
-                        }
-                        this.geoMessage = `Реквизиты из истории ID ${item.id} снова активны для ${item.geo_code}`;
-                        this.selectGeo(item.geo_code);
-                        await this.refreshDashboard();
-                    } catch (error) {
-                        this.geoMessage = error.message || "Не удалось активировать реквизиты";
-                    }
-                },
-
                 async deleteHistoryItem(item) {
                     if (!item || !item.geo_code) {
                         return;
@@ -1575,45 +1421,41 @@
                     }
                 },
 
-                buildLink() {
+                async buildLink() {
+                    this.linkMessage = "";
                     const amount = Number(String(this.linkForm.amount).replace(",", "."));
                     if (!Number.isFinite(amount) || amount <= 0) {
                         this.linkMessage = "Укажите корректную сумму";
                         return;
                     }
-                    const geoCode = this.linkForm.geo_code || this.availableGeos()[0]?.profile?.geo_code || "";
-                    const currentGeo = this.availableGeos().find((item) => item.profile.geo_code === geoCode);
-                    if (!currentGeo) {
-                        this.linkMessage = "Ссылку нельзя создать: нет GEO с доступными реквизитами";
+                    if (!this.linkForm.handler_user_id) {
+                        this.linkMessage = "Выберите обработчика";
                         return;
                     }
-                    const selectedHandler = this.handlers().find((item) => String(item.user_id) === String(this.linkForm.handler_user_id));
-                    if (!selectedHandler?.username) {
-                        this.linkMessage = "Ссылку нельзя создать: выберите обработчика с username";
-                        return;
+                    try {
+                        const response = await fetch(this.apiUrl("/api/admin/links"), {
+                            method: "POST",
+                            credentials: "include",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                amount: amount,
+                                geo_code: this.linkForm.geo_code || this.availableGeos()[0]?.profile?.geo_code || "",
+                                currency_code: this.linkForm.currency_code || "EUR",
+                                language_code: this.linkForm.language_code === "auto" ? null : (this.linkForm.language_code || null),
+                                handler_user_id: Number(this.linkForm.handler_user_id),
+                                label: this.linkForm.label || "",
+                                comment: this.linkForm.comment || ""
+                            })
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) {
+                            throw new Error(data.detail || "Не удалось создать ссылку");
+                        }
+                        this.linkMessage = data.link || "";
+                        await this.refreshDashboard();
+                    } catch (error) {
+                        this.linkMessage = error.message || "Не удалось создать ссылку";
                     }
-
-                    const rawLabel = String(this.linkForm.label || "").trim();
-                    const rawComment = String(this.linkForm.comment || "").trim();
-
-                    const url = new URL(this.dashboard.web_url || window.location.origin);
-                    url.searchParams.set("payment", this.formatQueryAmount(amount));
-                    url.searchParams.set("geo", geoCode);
-                    url.searchParams.set("mgr_link", `https://t.me/${selectedHandler.username}`);
-                    if (this.linkForm.language_code && this.linkForm.language_code !== "auto") {
-                        url.searchParams.set("lang", this.linkForm.language_code);
-                    }
-                    if (rawLabel) {
-                        url.searchParams.set("label", rawLabel);
-                    }
-                    if (rawComment) {
-                        url.searchParams.set("comment", rawComment);
-                    }
-                    this.linkMessage = url.toString();
-                },
-
-                formatQueryAmount(amount) {
-                    return Number(amount).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
                 },
 
                 formatRoleLabel(roleCode) {
@@ -1701,14 +1543,8 @@
                             throw new Error(data.detail || "Не удалось сохранить канал");
                         }
                         this.channelMessage = `Канал ${data.channel?.channel_name || name} сохранён`;
-                        const savedChannel = data.channel;
-                        if (savedChannel?.id) {
-                            const list = this.dashboard.channels || [];
-                            const filtered = list.filter((c) => c.id !== savedChannel.id);
-                            this.dashboard = { ...this.dashboard, channels: [...filtered, { ...savedChannel, handler_count: savedChannel.handler_count ?? 0 }] };
-                        }
                         await this.refreshDashboard();
-                        this.editChannel(savedChannel || { channel_name: name });
+                        this.editChannel(data.channel || { channel_name: name });
                     } catch (error) {
                         this.channelMessage = error.message || "Не удалось сохранить канал";
                     }
@@ -1804,45 +1640,6 @@
                         await this.refreshDashboard();
                     } catch (error) {
                         this.botUserMessage = error.message || "Не удалось удалить пользователя";
-                    }
-                },
-
-                async createWebUser() {
-                    this.webUserMessage = "";
-                    try {
-                        const response = await fetch(this.apiUrl("/api/admin/web-users"), {
-                            method: "POST",
-                            credentials: "include",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify(this.webUserForm)
-                        });
-                        const data = await response.json().catch(() => ({}));
-                        if (!response.ok) {
-                            throw new Error(data.detail || "Не удалось создать пользователя");
-                        }
-                        this.webUserMessage = `Пользователь ${this.webUserForm.username} создан`;
-                        this.webUserForm = { username: "", password: "", permissions: "superadmin" };
-                        await this.refreshDashboard();
-                    } catch (error) {
-                        this.webUserMessage = error.message || "Не удалось создать пользователя";
-                    }
-                },
-
-                async deleteWebUser(userId) {
-                    if (!userId) return;
-                    if (!window.confirm("Удалить пользователя веб-админки?")) return;
-                    try {
-                        const response = await fetch(this.apiUrl(`/api/admin/web-users/${userId}`), {
-                            method: "DELETE",
-                            credentials: "include"
-                        });
-                        const data = await response.json().catch(() => ({}));
-                        if (!response.ok) {
-                            throw new Error(data.detail || "Не удалось удалить");
-                        }
-                        await this.refreshDashboard();
-                    } catch (error) {
-                        this.webUserMessage = error.message || "Не удалось удалить";
                     }
                 },
 
