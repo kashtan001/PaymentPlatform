@@ -260,31 +260,6 @@
                         </div>
                     </div>
 
-                    <div class="mt-5 rounded-[1.5rem] border border-emerald-400/20 bg-emerald-500/10 p-4">
-                        <p class="text-xs uppercase tracking-[0.24em] text-emerald-200/80">Подсказка</p>
-                        <p class="mt-2 text-sm text-emerald-50">Сначала выбери GEO. Язык подтянется из текущего профиля GEO, чтобы было сразу видно, в каком контексте ты работаешь.</p>
-                        <div class="mt-4 flex flex-wrap gap-2">
-                            <template x-for="geo in geos()" :key="`priority-${geo.profile.geo_code}`">
-                                <button type="button"
-                                        @click="selectGeo(geo.profile.geo_code)"
-                                        class="rounded-full px-4 py-2 text-sm font-semibold transition"
-                                        :class="editingGeoCode === geo.profile.geo_code ? 'bg-emerald-300 text-emerald-950' : 'border border-emerald-300/20 text-emerald-50 hover:bg-emerald-400/10'">
-                                    <span x-text="geo.profile.geo_code"></span>
-                                </button>
-                            </template>
-                        </div>
-                        <div class="mt-4 flex flex-wrap gap-2 text-sm">
-                            <div class="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-emerald-50">
-                                <span class="text-emerald-200/80">Выбран GEO:</span>
-                                <span class="font-semibold" x-text="`${editingGeoCode} / ${currentGeoSnapshot()?.profile.geo_name || '—'}`"></span>
-                            </div>
-                            <div class="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-emerald-50">
-                                <span class="text-emerald-200/80">Язык GEO:</span>
-                                <span class="font-semibold" x-text="selectedGeoLanguageLabel()"></span>
-                            </div>
-                        </div>
-                    </div>
-
                     <form class="mt-5 space-y-4" @submit.prevent="saveRequisites">
                         <div class="rounded-[1.4rem] border border-white/10 bg-white/5 px-4 py-3 text-sm text-zinc-300">
                             Новый комплект будет добавлен в выбранное GEO и получит следующий порядковый номер внутри этого GEO.
@@ -336,6 +311,27 @@
                             <p class="mt-3 text-sm text-zinc-400">Удалять можно любой комплект, включая последний. Пустые GEO остаются доступны в админке, но пропадают из генератора ссылок.</p>
                         </div>
                         <div class="rounded-full bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-zinc-300" x-text="`${requisitesForGeo(editingGeoCode).length} записей`"></div>
+                    </div>
+
+                    <div class="mt-5 rounded-[1.5rem] border border-emerald-400/20 bg-emerald-500/10 p-4">
+                        <p class="text-xs uppercase tracking-[0.24em] text-emerald-200/80">Подсказка</p>
+                        <p class="mt-2 text-sm text-emerald-50">Сначала выбери GEO, чтобы видеть и управлять реквизитами именно для него.</p>
+                        <div class="mt-4 flex flex-wrap gap-2">
+                            <template x-for="geo in geos()" :key="`geo-req-${geo.profile.geo_code}`">
+                                <button type="button"
+                                        @click="selectGeo(geo.profile.geo_code)"
+                                        class="rounded-full px-4 py-2 text-sm font-semibold transition"
+                                        :class="editingGeoCode === geo.profile.geo_code ? 'bg-emerald-300 text-emerald-950' : 'border border-emerald-300/20 text-emerald-50 hover:bg-emerald-400/10'">
+                                    <span x-text="geo.profile.geo_code"></span>
+                                </button>
+                            </template>
+                        </div>
+                        <div class="mt-4 flex flex-wrap gap-2 text-sm">
+                            <div class="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-2 text-emerald-50">
+                                <span class="text-emerald-200/80">Выбран GEO:</span>
+                                <span class="font-semibold" x-text="`${editingGeoCode} / ${currentGeoSnapshot()?.profile.geo_name || '—'}`"></span>
+                            </div>
+                        </div>
                     </div>
 
                     <div x-show="!requisitesForGeo(editingGeoCode).length" x-cloak class="mt-5 rounded-[1.4rem] bg-white/5 px-4 py-4 text-sm text-zinc-400">

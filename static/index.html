@@ -140,13 +140,19 @@
 </head>
 <body x-data="landingApp()" x-init="init()">
     <div class="mx-auto min-h-screen max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
-        <header class="mb-6 grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-            <div></div>
-            <div class="surface rounded-full px-5 py-3 shadow-soft">
-                <p class="max-w-[60vw] truncate text-center text-sm font-semibold text-slate-900 sm:max-w-[24rem]" x-text="channelDisplayName()"></p>
+        <header class="mb-6 flex items-center justify-between gap-4">
+            <div class="flex min-w-0 flex-1 items-center gap-3">
+                <div x-show="hasChannelLogo()" x-cloak class="brand-logo flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full">
+                    <img :src="channelLogoFullUrl()" :alt="channelDisplayName()" class="h-full w-full object-cover">
+                </div>
+                <div x-show="!hasChannelLogo()" x-cloak class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[rgba(99,91,255,0.12)] text-[var(--accent)]">
+                    <span class="text-lg font-semibold" x-text="channelInitial()"></span>
+                </div>
+                <div class="surface min-w-0 flex-1 rounded-full px-5 py-3 shadow-soft sm:max-w-[18rem]">
+                    <p class="truncate text-sm font-semibold text-slate-900" x-text="channelDisplayName()"></p>
+                </div>
             </div>
-
-            <button type="button" @click="showLanguages = true" class="surface justify-self-end rounded-full px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
+            <button type="button" @click="showLanguages = true" class="surface shrink-0 rounded-full px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
                 <span x-text="languageLabel(currentLang)"></span>
             </button>
         </header>
@@ -760,6 +766,14 @@
 
                 channelLogoUrl() {
                     return String(this.manager.channel_logo_url || "").trim();
+                },
+
+                channelLogoFullUrl() {
+                    const raw = this.channelLogoUrl();
+                    if (!raw) return "";
+                    if (raw.startsWith("http://") || raw.startsWith("https://")) return raw;
+                    const base = APP_BASE_URL.replace(/\/$/, "");
+                    return raw.startsWith("/") ? `${base}${raw}` : `${base}/${raw}`;
                 },
 
                 hasChannelLogo() {
