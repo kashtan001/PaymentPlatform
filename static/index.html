@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -141,6 +141,9 @@
             transform: scale(0.7);
             transform-origin: top right;
             flex-shrink: 0;
+            align-self: flex-start;
+            margin-top: -0.55rem;
+            margin-right: -0.7rem;
         }
     </style>
 </head>
@@ -640,7 +643,7 @@
 
                 languageLabel(code) {
                     const found = this.availableLanguages.find((language) => language.code === code) || languageCatalog.find((language) => language.code === code);
-                    return found ? found.label : "English";
+                    return found ? found.label : "Español";
                 },
 
                 channelDisplayName() {

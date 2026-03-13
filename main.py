@@ -113,6 +113,7 @@ MENU_BUTTON_LABELS = {
     "🗂 История реквизитов",
     "🗑 Удалить реквизит",
     ADD_REQUISITE_BTN,
+    ADD_GEO_BTN,
     "👥 Права доступа",
     "🔗 Ссылка на оплату",
     "🛠 Админка",
@@ -315,12 +316,37 @@ def build_geo_default_config(geo_code: str) -> dict[str, Any]:
         return fallback
     return {
         "geo_name": safe_geo,
-        "default_language": "en",
+        "default_language": "es",
         "manager_name": f"{safe_geo} manager",
         "manager_telegram_url": "",
         "default_manager_id": None,
         "refresh_minutes": DEFAULT_REFRESH_MINUTES,
     }
+
+
+def is_geo_visible(geo_code: str | None) -> bool:
+    safe_geo = normalize_geo_code(geo_code)
+    if not safe_geo:
+        return False
+    if safe_geo in DEFAULT_GEO_CONFIGS:
+        return True
+    conn = get_connection()
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM geo_profiles
+        WHERE geo_code = ? AND COALESCE(visible, 1) = 1
+        LIMIT 1
+        """,
+        (safe_geo,),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def sanitize_visible_geo_code(value: str | None) -> str | None:
+    code = normalize_geo_code(value)
+    return code if is_geo_visible(code) else None
 
 
 def list_known_geo_codes() -> list[str]:
@@ -345,8 +371,11 @@ def list_geo_codes_with_requisites() -> list[str]:
     conn = get_connection()
     rows = conn.execute(
         """
-        SELECT DISTINCT geo_code
-        FROM geo_requisites
+        SELECT DISTINCT req.geo_code
+        FROM geo_requisites AS req
+        INNER JOIN geo_profiles AS profile
+            ON profile.geo_code = req.geo_code
+        WHERE COALESCE(profile.visible, 1) = 1
         ORDER BY geo_code ASC
         """
     ).fetchall()
@@ -620,6 +649,18 @@ def resolve_recommended_language(
             return country_default
 
     return sanitize_language_code(geo_default_language) or "es"
+
+
+def hide_legacy_geo_profiles(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        UPDATE geo_profiles
+        SET visible = 0
+        WHERE geo_code NOT IN (?, ?, ?)
+          AND COALESCE(is_custom, 0) = 0
+        """,
+        tuple(DEFAULT_GEO_CONFIGS.keys()),
+    )
 
 
 def legacy_seed_requisites(conn: sqlite3.Connection) -> dict[str, str]:
@@ -1056,6 +1097,9 @@ def init_db() -> None:
         """
     )
 
+    geo_profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info(geo_profiles)")}
+    geo_custom_flag_is_new = "is_custom" not in geo_profile_columns
+
     ensure_column(conn, "visits", "geo_code", "TEXT")
     ensure_column(conn, "visits", "payment_amount", "REAL")
     ensure_column(conn, "visits", "payment_label", "TEXT")
@@ -1081,6 +1125,8 @@ def init_db() -> None:
     ensure_column(conn, "geo_requisites", "bic_swift", "TEXT DEFAULT ''")
     ensure_column(conn, "geo_requisites", "sequence_number", "INTEGER")
     ensure_column(conn, "geo_profiles", "default_manager_id", "INTEGER")
+    ensure_column(conn, "geo_profiles", "visible", "INTEGER NOT NULL DEFAULT 1")
+    ensure_column(conn, "geo_profiles", "is_custom", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "bot_activity_log", "actor_role", "TEXT")
     ensure_column(conn, "bot_activity_log", "geo_code", "TEXT")
     ensure_column(conn, "bot_activity_log", "target_user_id", "INTEGER")
@@ -1146,6 +1192,8 @@ def init_db() -> None:
     )
     seed_bot_admins(conn)
     seed_geo_data(conn)
+    if geo_custom_flag_is_new:
+        hide_legacy_geo_profiles(conn)
     backfill_geo_requisites_sequence_numbers(conn)
     migrate_legacy_geo_managers(conn)
     conn.commit()
@@ -1188,8 +1236,9 @@ def list_geo_profiles() -> list[dict[str, Any]]:
         """
         SELECT
             geo_code, geo_name, default_language, manager_name, manager_telegram_url,
-            default_manager_id, refresh_minutes, updated_at
+            default_manager_id, refresh_minutes, updated_at, COALESCE(visible, 1) AS visible
         FROM geo_profiles
+        WHERE COALESCE(visible, 1) = 1
         ORDER BY geo_code ASC
         """
     ).fetchall()
@@ -1422,7 +1471,7 @@ def list_geo_requisites_history(limit: int = 500) -> list[dict[str, Any]]:
         (limit,),
     ).fetchall()
     conn.close()
-    return [dict(row) for row in rows]
+    return [dict(row) for row in rows if is_geo_visible(row["geo_code"])]
 
 
 def list_geo_requisites_history_for_geo(geo_code: str, limit: int = 8) -> list[dict[str, Any]]:
@@ -1462,9 +1511,9 @@ def save_geo_configuration(geo_code: str, payload: GeoConfigPayload) -> dict[str
         """
         INSERT INTO geo_profiles (
             geo_code, geo_name, default_language, manager_name, manager_telegram_url,
-            default_manager_id, refresh_minutes, updated_at
+            default_manager_id, refresh_minutes, updated_at, visible, is_custom
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
         ON CONFLICT(geo_code) DO UPDATE SET
             geo_name = excluded.geo_name,
             default_language = excluded.default_language,
@@ -1472,7 +1521,9 @@ def save_geo_configuration(geo_code: str, payload: GeoConfigPayload) -> dict[str
             manager_telegram_url = geo_profiles.manager_telegram_url,
             default_manager_id = excluded.default_manager_id,
             refresh_minutes = excluded.refresh_minutes,
-            updated_at = excluded.updated_at
+            updated_at = excluded.updated_at,
+            visible = 1,
+            is_custom = excluded.is_custom
         """,
         (
             safe_geo,
@@ -1483,6 +1534,7 @@ def save_geo_configuration(geo_code: str, payload: GeoConfigPayload) -> dict[str
             default_manager_id,
             refresh_minutes,
             utc_now_iso(),
+            0 if safe_geo in DEFAULT_GEO_CONFIGS else 1,
         ),
     )
     conn.commit()
@@ -1631,7 +1683,7 @@ def list_visits(limit: int = 120) -> list[dict[str, Any]]:
         (limit,),
     ).fetchall()
     conn.close()
-    return [dict(row) for row in rows]
+    return [dict(row) for row in rows if is_geo_visible(row["geo_code"])]
 
 
 def list_bot_admins() -> list[dict[str, Any]]:
@@ -1846,7 +1898,9 @@ def list_payment_links(limit: int = 60) -> list[dict[str, Any]]:
     ).fetchall()
     result: list[dict[str, Any]] = []
     for row in rows:
-        result.append(expire_payment_link_if_needed(dict(row), conn))
+        item = expire_payment_link_if_needed(dict(row), conn)
+        if is_geo_visible(item.get("geo_code")):
+            result.append(item)
     conn.commit()
     conn.close()
     return result
@@ -2003,7 +2057,7 @@ def list_bot_activity(limit: int = 200) -> list[dict[str, Any]]:
         (limit,),
     ).fetchall()
     conn.close()
-    return [dict(row) for row in rows]
+    return [dict(row) for row in rows if not row["geo_code"] or is_geo_visible(row["geo_code"])]
 
 
 def get_worker_stats() -> list[dict[str, Any]]:
@@ -2349,7 +2403,9 @@ def get_summary_stats() -> dict[str, Any]:
     ).fetchone()["value"]
     preview_visits = conn.execute("SELECT COUNT(*) AS value FROM visits WHERE mode = 'preview'").fetchone()["value"]
     live_visits = conn.execute("SELECT COUNT(*) AS value FROM visits WHERE mode = 'live'").fetchone()["value"]
-    configured_geos = conn.execute("SELECT COUNT(*) AS value FROM geo_profiles").fetchone()["value"]
+    configured_geos = conn.execute(
+        "SELECT COUNT(*) AS value FROM geo_profiles WHERE COALESCE(visible, 1) = 1"
+    ).fetchone()["value"]
     active_links = conn.execute("SELECT COUNT(*) AS value FROM payment_links WHERE status = 'active'").fetchone()["value"]
     expired_links = conn.execute("SELECT COUNT(*) AS value FROM payment_links WHERE status = 'expired'").fetchone()["value"]
 
@@ -2382,6 +2438,17 @@ def get_summary_stats() -> dict[str, Any]:
     ).fetchall()
     conn.close()
 
+    top_languages = [
+        {"label": row["label"], "count": row["count_value"]}
+        for row in top_languages_rows
+        if sanitize_language_code(row["label"])
+    ]
+    top_geos = [
+        {"label": row["label"], "count": row["count_value"]}
+        for row in top_geos_rows
+        if is_geo_visible(row["label"])
+    ]
+
     return {
         "visits_total": visits_total,
         "visits_today": visits_today,
@@ -2392,8 +2459,8 @@ def get_summary_stats() -> dict[str, Any]:
         "active_links": active_links,
         "expired_links": expired_links,
         "top_countries": [{"label": row["label"], "count": row["count_value"]} for row in top_countries_rows],
-        "top_languages": [{"label": row["label"], "count": row["count_value"]} for row in top_languages_rows],
-        "top_geos": [{"label": row["label"], "count": row["count_value"]} for row in top_geos_rows],
+        "top_languages": top_languages,
+        "top_geos": top_geos,
     }
 
 
@@ -2692,9 +2759,9 @@ def get_bot_status() -> dict[str, Any]:
 
 
 def get_selected_geo(context: ContextTypes.DEFAULT_TYPE, user_id: int | None = None) -> str:
-    selected_geo = sanitize_geo_code(str(context.user_data.get("selected_geo", "")))
+    selected_geo = sanitize_visible_geo_code(str(context.user_data.get("selected_geo", "")))
     if not selected_geo:
-        selected_geo = get_bot_admin_selected_geo(user_id)
+        selected_geo = sanitize_visible_geo_code(get_bot_admin_selected_geo(user_id))
     if selected_geo:
         context.user_data["selected_geo"] = selected_geo
         return selected_geo
@@ -2702,7 +2769,7 @@ def get_selected_geo(context: ContextTypes.DEFAULT_TYPE, user_id: int | None = N
     if selected_geo:
         context.user_data["selected_geo"] = selected_geo
         return selected_geo
-    fallback = list_known_geo_codes()
+    fallback = [profile["geo_code"] for profile in list_geo_profiles()]
     if fallback:
         context.user_data["selected_geo"] = fallback[0]
         return fallback[0]
@@ -2778,7 +2845,7 @@ LANDING_COMMENT_BY_BUTTON = {label: text for _lang, label, text in LANDING_COMME
 
 def landing_comment_keyboard() -> ReplyKeyboardMarkup:
     labels = [label for _lang, label, _text in LANDING_COMMENT_OPTIONS]
-    rows = [labels[:3], labels[3:]]  # 3 + 2 для удобства на мобильном
+    rows = [labels]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True)
 
 
@@ -2794,7 +2861,6 @@ def build_geo_details_text(geo_code: str) -> str:
         else "Реквизиты: отсутствуют"
     )
     return (
-        f"GEO: {profile['geo_code']} ({profile['geo_name']})\n"
         f"Язык по умолчанию: {profile['default_language']}\n"
         f"Таймер: {profile['refresh_minutes']} мин\n"
         f"Обработчик выбирается при создании ссылки.\n\n"
@@ -3234,7 +3300,7 @@ async def select_geo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def select_geo_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    geo_code = sanitize_geo_code(update.effective_message.text)
+    geo_code = sanitize_visible_geo_code(update.effective_message.text)
     if not geo_code:
         available = ", ".join(profile["geo_code"] for profile in list_geo_profiles())
         await update.effective_message.reply_text(f"Выберите GEO из списка: {available}")
@@ -3263,7 +3329,7 @@ async def add_requisite_start(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def add_req_geo_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    geo_code = sanitize_geo_code(update.effective_message.text)
+    geo_code = sanitize_visible_geo_code(update.effective_message.text)
     if not geo_code:
         available = ", ".join(p["geo_code"] for p in list_geo_profiles())
         await update.effective_message.reply_text(f"Выберите GEO из списка: {available}")
@@ -3381,7 +3447,7 @@ async def show_requisites_delete_start(update: Update, context: ContextTypes.DEF
 
 
 async def delete_req_geo_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    geo_code = sanitize_geo_code(update.effective_message.text)
+    geo_code = sanitize_visible_geo_code(update.effective_message.text)
     if not geo_code:
         available = ", ".join(p["geo_code"] for p in list_geo_profiles())
         await update.effective_message.reply_text(f"Выберите GEO из списка: {available}")
@@ -3731,7 +3797,7 @@ async def create_link_currency(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def create_link_requisites(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    geo_code = sanitize_geo_code(update.effective_message.text)
+    geo_code = sanitize_visible_geo_code(update.effective_message.text)
     if not geo_code or not geo_has_requisites(geo_code):
         available = ", ".join(list_geo_codes_with_requisites())
         await update.effective_message.reply_text(
@@ -3824,7 +3890,7 @@ async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data["temp_comment"] = LANDING_COMMENT_BY_BUTTON[choice]
     selected_geo = str(context.user_data.get("temp_geo") or "")
     await update.effective_message.reply_text(
-        f"Для ссылки будет зафиксирован текущий активный комплект реквизитов GEO {selected_geo}.\n"
+        "Для ссылки будет зафиксирован текущий активный комплект реквизитов.\n"
         "Теперь выберите ответственного обработчика.\n\n"
         f"{build_link_manager_selection_text(selected_geo)}"
     )
