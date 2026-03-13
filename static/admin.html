@@ -182,6 +182,7 @@
                         </div>
                         <p class="mt-4 max-w-3xl text-sm text-zinc-400">
                             Внутренняя панель для GEO-конфигов, актуальных реквизитов, ролей Telegram-бота и генерации клиентских ссылок.
+                            По умолчанию доступны Spain, Germany и Lithuania, а новые GEO могут добавлять только админы.
                         </p>
                     </div>
 
@@ -609,7 +610,7 @@
 
             <details x-show="isAdmin()" x-cloak class="panel rounded-[2rem] p-5 shadow-panel sm:p-6">
                 <summary class="cursor-pointer list-none text-lg font-semibold">
-                    Дополнительно
+                    Аналитика и GEO
                 </summary>
                 <p class="mt-3 text-sm text-zinc-400">Здесь скрыта служебная и аналитическая информация, которая не нужна для ежедневной работы.</p>
 
@@ -629,11 +630,11 @@
                                 <div>
                                     <p class="text-xs uppercase tracking-[0.3em] text-zinc-500">Editor</p>
                                     <div class="mt-2 panel-title">
-                                        <h2 class="text-xl font-semibold">Редактор GEO</h2>
+                                        <h2 class="text-xl font-semibold">Добавить и редактировать GEO</h2>
                                         <div class="info-trigger">
                                             <button type="button" class="info-button" aria-label="Описание редактора GEO">i</button>
                                             <div class="info-text">
-                                                Меняет название GEO, язык по умолчанию и автообновление. Эти настройки используются в лендинге и в генераторе ссылок.
+                                                Только администратор может вручную добавить новый GEO, задать код, название, язык по умолчанию и автообновление.
                                             </div>
                                         </div>
                                     </div>
@@ -649,10 +650,10 @@
                                 </p>
                             </div>
 
-                            <form x-show="can('add_geo')" class="mt-5 space-y-4 rounded-[1.5rem] border border-white/10 bg-black/10 p-4" @submit.prevent="createGeo">
+                            <form class="mt-5 space-y-4 rounded-[1.5rem] border border-white/10 bg-black/10 p-4" @submit.prevent="createGeo">
                                 <div>
                                     <p class="text-sm font-semibold text-white">Добавить новое GEO</p>
-                                    <p class="mt-1 text-sm text-zinc-400">Новое GEO появится в админке сразу. В генератор ссылок оно попадёт только после добавления реквизитов.</p>
+                                    <p class="mt-1 text-sm text-zinc-400">Код и название вводятся вручную. Новое GEO появится в админке сразу, а в генератор ссылок попадёт только после добавления реквизитов.</p>
                                 </div>
                                 <div class="grid gap-4 sm:grid-cols-4">
                                     <label class="block">
@@ -676,7 +677,7 @@
                                         <input type="number" min="1" max="120" x-model="newGeoForm.refresh_minutes" class="input-shell w-full rounded-2xl px-4 py-4 outline-none">
                                     </label>
                                 </div>
-                                <button type="submit" class="rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Создать GEO</button>
+                                <button type="submit" class="rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Добавить GEO</button>
                             </form>
 
                             <form class="mt-5 space-y-4" @submit.prevent="saveGeo">

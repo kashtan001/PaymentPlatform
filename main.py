@@ -97,7 +97,7 @@ WAITING_LINK_MANAGER = 10
 WAITING_LINK_LANGUAGE = 11
 WAITING_ADD_REQ_GEO = 12
 WAITING_DELETE_REQ_GEO = 13
-WAITING_ADD_GEO = 14
+WAITING_NEW_GEO_DETAILS = 14
 ADD_REQUISITE_BTN = "➕ Добавить реквизит"
 DELETE_REQUISITE_BTN = "🗑 Удалить реквизит"
 ADD_GEO_BTN = "➕ Добавить GEO"
@@ -142,8 +142,32 @@ MAX_LOGIN_ATTEMPTS = 5
 LANGUAGE_OPTIONS = [
     {"code": "es", "label": "Español"},
     {"code": "de", "label": "Deutsch"},
-    {"code": "lt", "label": "Lietuvių"},
+    {"code": "lt", "label": "Lietuviu"},
 ]
+FALLBACK_LANGUAGE_CODE = LANGUAGE_OPTIONS[0]["code"]
+LANDING_COMMENT_OPTIONS = [
+    {
+        "code": "de",
+        "button": "Немецкий",
+        "comment": "Es werden nur ECHTZEIT-UEBERWEISUNGEN akzeptiert",
+    },
+    {
+        "code": "es",
+        "button": "Испанский",
+        "comment": "Solo se acepta PAGO INSTANTÁNEO",
+    },
+    {
+        "code": "lt",
+        "button": "Литовский",
+        "comment": "Priimami tik momentiniai mokejimai",
+    },
+]
+LANDING_COMMENT_BY_BUTTON = {
+    item["button"].casefold(): item for item in LANDING_COMMENT_OPTIONS
+}
+LANDING_COMMENT_BUTTON_BY_CODE = {
+    item["code"]: item["button"] for item in LANDING_COMMENT_OPTIONS
+}
 LANDING_LANGUAGE_SET = {item["code"] for item in LANGUAGE_OPTIONS}
 CURRENCY_OPTIONS = [
     {"code": "EUR", "label": "Евро"},
@@ -170,7 +194,6 @@ BOT_ROLE_PERMISSIONS = {
         "manage_access",
         "create_link",
         "open_admin_panel",
-        "add_geo",
     },
 }
 LANGUAGE_TO_GEO_MAP = {
@@ -186,6 +209,14 @@ SPECIAL_LANGUAGE_MAP = {
     "nn": "no",
 }
 DEFAULT_GEO_CONFIGS = {
+    "LT": {
+        "geo_name": "Lithuania",
+        "default_language": "lt",
+        "manager_name": "Lithuania manager",
+        "manager_telegram_url": "",
+        "default_manager_id": None,
+        "refresh_minutes": DEFAULT_REFRESH_MINUTES,
+    },
     "ES": {
         "geo_name": "Spain",
         "default_language": "es",
@@ -198,14 +229,6 @@ DEFAULT_GEO_CONFIGS = {
         "geo_name": "Germany",
         "default_language": "de",
         "manager_name": "Germany manager",
-        "manager_telegram_url": "",
-        "default_manager_id": None,
-        "refresh_minutes": DEFAULT_REFRESH_MINUTES,
-    },
-    "LT": {
-        "geo_name": "Lithuania",
-        "default_language": "lt",
-        "manager_name": "Lithuania manager",
         "manager_telegram_url": "",
         "default_manager_id": None,
         "refresh_minutes": DEFAULT_REFRESH_MINUTES,
@@ -316,37 +339,12 @@ def build_geo_default_config(geo_code: str) -> dict[str, Any]:
         return fallback
     return {
         "geo_name": safe_geo,
-        "default_language": "es",
+        "default_language": FALLBACK_LANGUAGE_CODE,
         "manager_name": f"{safe_geo} manager",
         "manager_telegram_url": "",
         "default_manager_id": None,
         "refresh_minutes": DEFAULT_REFRESH_MINUTES,
     }
-
-
-def is_geo_visible(geo_code: str | None) -> bool:
-    safe_geo = normalize_geo_code(geo_code)
-    if not safe_geo:
-        return False
-    if safe_geo in DEFAULT_GEO_CONFIGS:
-        return True
-    conn = get_connection()
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM geo_profiles
-        WHERE geo_code = ? AND COALESCE(visible, 1) = 1
-        LIMIT 1
-        """,
-        (safe_geo,),
-    ).fetchone()
-    conn.close()
-    return row is not None
-
-
-def sanitize_visible_geo_code(value: str | None) -> str | None:
-    code = normalize_geo_code(value)
-    return code if is_geo_visible(code) else None
 
 
 def list_known_geo_codes() -> list[str]:
@@ -371,11 +369,8 @@ def list_geo_codes_with_requisites() -> list[str]:
     conn = get_connection()
     rows = conn.execute(
         """
-        SELECT DISTINCT req.geo_code
-        FROM geo_requisites AS req
-        INNER JOIN geo_profiles AS profile
-            ON profile.geo_code = req.geo_code
-        WHERE COALESCE(profile.visible, 1) = 1
+        SELECT DISTINCT geo_code
+        FROM geo_requisites
         ORDER BY geo_code ASC
         """
     ).fetchall()
@@ -648,19 +643,7 @@ def resolve_recommended_language(
         if country_default:
             return country_default
 
-    return sanitize_language_code(geo_default_language) or "es"
-
-
-def hide_legacy_geo_profiles(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        UPDATE geo_profiles
-        SET visible = 0
-        WHERE geo_code NOT IN (?, ?, ?)
-          AND COALESCE(is_custom, 0) = 0
-        """,
-        tuple(DEFAULT_GEO_CONFIGS.keys()),
-    )
+    return sanitize_language_code(geo_default_language) or FALLBACK_LANGUAGE_CODE
 
 
 def legacy_seed_requisites(conn: sqlite3.Connection) -> dict[str, str]:
@@ -1097,9 +1080,6 @@ def init_db() -> None:
         """
     )
 
-    geo_profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info(geo_profiles)")}
-    geo_custom_flag_is_new = "is_custom" not in geo_profile_columns
-
     ensure_column(conn, "visits", "geo_code", "TEXT")
     ensure_column(conn, "visits", "payment_amount", "REAL")
     ensure_column(conn, "visits", "payment_label", "TEXT")
@@ -1125,8 +1105,6 @@ def init_db() -> None:
     ensure_column(conn, "geo_requisites", "bic_swift", "TEXT DEFAULT ''")
     ensure_column(conn, "geo_requisites", "sequence_number", "INTEGER")
     ensure_column(conn, "geo_profiles", "default_manager_id", "INTEGER")
-    ensure_column(conn, "geo_profiles", "visible", "INTEGER NOT NULL DEFAULT 1")
-    ensure_column(conn, "geo_profiles", "is_custom", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "bot_activity_log", "actor_role", "TEXT")
     ensure_column(conn, "bot_activity_log", "geo_code", "TEXT")
     ensure_column(conn, "bot_activity_log", "target_user_id", "INTEGER")
@@ -1192,8 +1170,6 @@ def init_db() -> None:
     )
     seed_bot_admins(conn)
     seed_geo_data(conn)
-    if geo_custom_flag_is_new:
-        hide_legacy_geo_profiles(conn)
     backfill_geo_requisites_sequence_numbers(conn)
     migrate_legacy_geo_managers(conn)
     conn.commit()
@@ -1236,9 +1212,8 @@ def list_geo_profiles() -> list[dict[str, Any]]:
         """
         SELECT
             geo_code, geo_name, default_language, manager_name, manager_telegram_url,
-            default_manager_id, refresh_minutes, updated_at, COALESCE(visible, 1) AS visible
+            default_manager_id, refresh_minutes, updated_at
         FROM geo_profiles
-        WHERE COALESCE(visible, 1) = 1
         ORDER BY geo_code ASC
         """
     ).fetchall()
@@ -1471,7 +1446,7 @@ def list_geo_requisites_history(limit: int = 500) -> list[dict[str, Any]]:
         (limit,),
     ).fetchall()
     conn.close()
-    return [dict(row) for row in rows if is_geo_visible(row["geo_code"])]
+    return [dict(row) for row in rows]
 
 
 def list_geo_requisites_history_for_geo(geo_code: str, limit: int = 8) -> list[dict[str, Any]]:
@@ -1511,9 +1486,9 @@ def save_geo_configuration(geo_code: str, payload: GeoConfigPayload) -> dict[str
         """
         INSERT INTO geo_profiles (
             geo_code, geo_name, default_language, manager_name, manager_telegram_url,
-            default_manager_id, refresh_minutes, updated_at, visible, is_custom
+            default_manager_id, refresh_minutes, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(geo_code) DO UPDATE SET
             geo_name = excluded.geo_name,
             default_language = excluded.default_language,
@@ -1521,9 +1496,7 @@ def save_geo_configuration(geo_code: str, payload: GeoConfigPayload) -> dict[str
             manager_telegram_url = geo_profiles.manager_telegram_url,
             default_manager_id = excluded.default_manager_id,
             refresh_minutes = excluded.refresh_minutes,
-            updated_at = excluded.updated_at,
-            visible = 1,
-            is_custom = excluded.is_custom
+            updated_at = excluded.updated_at
         """,
         (
             safe_geo,
@@ -1534,7 +1507,6 @@ def save_geo_configuration(geo_code: str, payload: GeoConfigPayload) -> dict[str
             default_manager_id,
             refresh_minutes,
             utc_now_iso(),
-            0 if safe_geo in DEFAULT_GEO_CONFIGS else 1,
         ),
     )
     conn.commit()
@@ -1683,7 +1655,7 @@ def list_visits(limit: int = 120) -> list[dict[str, Any]]:
         (limit,),
     ).fetchall()
     conn.close()
-    return [dict(row) for row in rows if is_geo_visible(row["geo_code"])]
+    return [dict(row) for row in rows]
 
 
 def list_bot_admins() -> list[dict[str, Any]]:
@@ -1898,9 +1870,7 @@ def list_payment_links(limit: int = 60) -> list[dict[str, Any]]:
     ).fetchall()
     result: list[dict[str, Any]] = []
     for row in rows:
-        item = expire_payment_link_if_needed(dict(row), conn)
-        if is_geo_visible(item.get("geo_code")):
-            result.append(item)
+        result.append(expire_payment_link_if_needed(dict(row), conn))
     conn.commit()
     conn.close()
     return result
@@ -2057,7 +2027,7 @@ def list_bot_activity(limit: int = 200) -> list[dict[str, Any]]:
         (limit,),
     ).fetchall()
     conn.close()
-    return [dict(row) for row in rows if not row["geo_code"] or is_geo_visible(row["geo_code"])]
+    return [dict(row) for row in rows]
 
 
 def get_worker_stats() -> list[dict[str, Any]]:
@@ -2403,9 +2373,7 @@ def get_summary_stats() -> dict[str, Any]:
     ).fetchone()["value"]
     preview_visits = conn.execute("SELECT COUNT(*) AS value FROM visits WHERE mode = 'preview'").fetchone()["value"]
     live_visits = conn.execute("SELECT COUNT(*) AS value FROM visits WHERE mode = 'live'").fetchone()["value"]
-    configured_geos = conn.execute(
-        "SELECT COUNT(*) AS value FROM geo_profiles WHERE COALESCE(visible, 1) = 1"
-    ).fetchone()["value"]
+    configured_geos = conn.execute("SELECT COUNT(*) AS value FROM geo_profiles").fetchone()["value"]
     active_links = conn.execute("SELECT COUNT(*) AS value FROM payment_links WHERE status = 'active'").fetchone()["value"]
     expired_links = conn.execute("SELECT COUNT(*) AS value FROM payment_links WHERE status = 'expired'").fetchone()["value"]
 
@@ -2438,17 +2406,6 @@ def get_summary_stats() -> dict[str, Any]:
     ).fetchall()
     conn.close()
 
-    top_languages = [
-        {"label": row["label"], "count": row["count_value"]}
-        for row in top_languages_rows
-        if sanitize_language_code(row["label"])
-    ]
-    top_geos = [
-        {"label": row["label"], "count": row["count_value"]}
-        for row in top_geos_rows
-        if is_geo_visible(row["label"])
-    ]
-
     return {
         "visits_total": visits_total,
         "visits_today": visits_today,
@@ -2459,8 +2416,8 @@ def get_summary_stats() -> dict[str, Any]:
         "active_links": active_links,
         "expired_links": expired_links,
         "top_countries": [{"label": row["label"], "count": row["count_value"]} for row in top_countries_rows],
-        "top_languages": top_languages,
-        "top_geos": top_geos,
+        "top_languages": [{"label": row["label"], "count": row["count_value"]} for row in top_languages_rows],
+        "top_geos": [{"label": row["label"], "count": row["count_value"]} for row in top_geos_rows],
     }
 
 
@@ -2759,9 +2716,9 @@ def get_bot_status() -> dict[str, Any]:
 
 
 def get_selected_geo(context: ContextTypes.DEFAULT_TYPE, user_id: int | None = None) -> str:
-    selected_geo = sanitize_visible_geo_code(str(context.user_data.get("selected_geo", "")))
+    selected_geo = sanitize_geo_code(str(context.user_data.get("selected_geo", "")))
     if not selected_geo:
-        selected_geo = sanitize_visible_geo_code(get_bot_admin_selected_geo(user_id))
+        selected_geo = get_bot_admin_selected_geo(user_id)
     if selected_geo:
         context.user_data["selected_geo"] = selected_geo
         return selected_geo
@@ -2769,7 +2726,7 @@ def get_selected_geo(context: ContextTypes.DEFAULT_TYPE, user_id: int | None = N
     if selected_geo:
         context.user_data["selected_geo"] = selected_geo
         return selected_geo
-    fallback = [profile["geo_code"] for profile in list_geo_profiles()]
+    fallback = list_known_geo_codes()
     if fallback:
         context.user_data["selected_geo"] = fallback[0]
         return fallback[0]
@@ -2795,9 +2752,7 @@ def main_keyboard(role: str | None) -> ReplyKeyboardMarkup:
             rows.append(["📝 Реквизиты", "🗂 История реквизитов"])
             rows.append([DELETE_REQUISITE_BTN])
     if bot_role_has_permission(safe_role, "manage_access"):
-        rows.append(["👥 Права доступа"])
-    if bot_role_has_permission(safe_role, "add_geo"):
-        rows.append([ADD_GEO_BTN])
+        rows.append(["👥 Права доступа", ADD_GEO_BTN])
     if bot_role_has_permission(safe_role, "create_link"):
         rows.append(["🔗 Ссылка на оплату"])
     if bot_role_has_permission(safe_role, "open_admin_panel"):
@@ -2834,21 +2789,6 @@ def manager_action_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-# Комментарий для лендинга — фиксированные фразы по языкам (не переводить через переводчик)
-LANDING_COMMENT_OPTIONS: list[tuple[str, str, str]] = [
-    ("es", "Испанский", "Solo se acepta PAGO INSTANTÁNEO"),
-    ("de", "Немецкий", "Es werden nur ECHTZEIT-UEBERWEISUNGEN akzeptiert"),
-    ("lt", "Литовский", "Priimami tik AKIMIRKSNIAI MOKĖJIMAI"),
-]
-LANDING_COMMENT_BY_BUTTON = {label: text for _lang, label, text in LANDING_COMMENT_OPTIONS}
-
-
-def landing_comment_keyboard() -> ReplyKeyboardMarkup:
-    labels = [label for _lang, label, _text in LANDING_COMMENT_OPTIONS]
-    rows = [labels]
-    return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True)
-
-
 def build_geo_details_text(geo_code: str) -> str:
     profile = get_geo_profile(geo_code)
     requisites = get_active_requisites(geo_code)
@@ -2861,6 +2801,7 @@ def build_geo_details_text(geo_code: str) -> str:
         else "Реквизиты: отсутствуют"
     )
     return (
+        f"GEO: {profile['geo_code']} ({profile['geo_name']})\n"
         f"Язык по умолчанию: {profile['default_language']}\n"
         f"Таймер: {profile['refresh_minutes']} мин\n"
         f"Обработчик выбирается при создании ссылки.\n\n"
@@ -2898,7 +2839,7 @@ def build_admins_text() -> str:
         "\nРоли:\n"
         "Обработчик -> ссылки (сумма, валюта, GEO, комментарии, обработчик, язык)\n"
         "Процессор -> добавить/удалить реквизит (GEO выбирается в потоке)\n"
-        "Админ -> полный доступ\n\n"
+        "Админ -> полный доступ и добавление новых GEO\n\n"
         "Добавить админа: /addadmin 123456789\n"
         "Поставить роль: /setrole 123456789 handler|processor|admin\n"
         "Удалить: /removeadmin 123456789\n"
@@ -2923,6 +2864,7 @@ def build_help_text(role: str | None, geo_code: str) -> str:
         )
     lines = [
         "Что можно делать сейчас:",
+        f"Текущий GEO: {geo_code}",
         "",
     ]
     if bot_role_has_permission(safe_role, "select_geo"):
@@ -2935,7 +2877,25 @@ def build_help_text(role: str | None, geo_code: str) -> str:
         lines.append("4. История реквизитов открывается кнопкой `🗂 История реквизитов`.")
     if bot_role_has_permission(safe_role, "manage_access"):
         lines.append("5. Права доступа смотрите в `👥 Права доступа`.")
+        lines.append("6. Новый GEO создается кнопкой `➕ Добавить GEO`.")
     return "\n".join(lines)
+
+
+def build_add_geo_text() -> str:
+    options = ", ".join(f"{item['code']} ({item['label']})" for item in LANGUAGE_OPTIONS)
+    return (
+        "Отправьте новый GEO четырьмя строками:\n"
+        "1. Код GEO\n"
+        "2. Название GEO\n"
+        "3. Язык по умолчанию\n"
+        "4. Таймер в минутах (или - для значения по умолчанию)\n\n"
+        "Пример:\n"
+        "PL\n"
+        "Poland\n"
+        "es\n"
+        "15\n\n"
+        f"Доступные языки: {options}"
+    )
 
 
 def build_requisites_history_text(geo_code: str, action: str = "restore") -> str:
@@ -2967,6 +2927,7 @@ def build_requisites_history_text(geo_code: str, action: str = "restore") -> str
 def build_link_requisites_selection_text(geo_code: str) -> str:
     items = list_geo_requisites_history_for_geo(geo_code)
     lines = [
+        f"Текущий GEO: {geo_code}",
         "Выберите реквизиты для ссылки.",
         "Отправьте `latest` или `-`, чтобы взять текущие активные.",
         "",
@@ -2981,6 +2942,7 @@ def build_link_requisites_selection_text(geo_code: str) -> str:
 def build_link_manager_selection_text(geo_code: str) -> str:
     items = list_handler_contacts()
     lines = [
+        f"Текущий GEO: {geo_code}",
         "Выберите обработчика.",
         "Отправьте @username обработчика из списка ниже.",
         "На лендинг попадет именно эта Telegram-ссылка.",
@@ -3005,6 +2967,25 @@ def build_link_language_selection_text() -> str:
     )
 
 
+def build_landing_comment_selection_text() -> str:
+    lines = ["На каком языке комментарий для лендинга?", ""]
+    lines.extend(item["button"] for item in LANDING_COMMENT_OPTIONS)
+    return "\n".join(lines)
+
+
+def landing_comment_picker_keyboard() -> ReplyKeyboardMarkup:
+    rows: list[list[str]] = []
+    current_row: list[str] = []
+    for item in LANDING_COMMENT_OPTIONS:
+        current_row.append(item["button"])
+        if len(current_row) == 2:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True)
+
+
 def build_link_currency_selection_text() -> str:
     options = ", ".join(f"{item['code']} ({item['label']})" for item in CURRENCY_OPTIONS)
     return (
@@ -3018,7 +2999,7 @@ def build_link_geo_selection_text(selected_geo: str | None = None) -> str:
     available = list_geo_codes_with_requisites()
     preferred = sanitize_geo_code(selected_geo)
     lines = [
-        "Выберите GEO для реквизита.",
+        f"Выберите GEO для реквизита. Текущее GEO: {preferred or 'не выбрано'}",
         "На лендинг подтянется первый доступный комплект реквизитов выбранного GEO.",
         "",
         f"Доступные GEO: {', '.join(available) if available else 'нет доступных GEO'}",
@@ -3086,7 +3067,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         await update.effective_message.reply_text(
             "Внутренняя панель команды активна.\n\n"
-            f"Ваша роль: {get_bot_role_label(role)}\n\n"
+            f"Ваша роль: {get_bot_role_label(role)}\n"
+            f"Текущий выбранный GEO: {selected_geo}\n\n"
             f"{build_geo_details_text(selected_geo)}\n\n{build_help_text(role, selected_geo)}",
             reply_markup=main_keyboard(role),
         )
@@ -3247,60 +3229,20 @@ async def set_role_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
-async def add_geo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await admin_check(update, "add_geo"):
-        return ConversationHandler.END
-    await update.effective_message.reply_text(
-        "Введите код GEO (2–12 символов, буквы/цифры) и название через пробел.\n"
-        "Например: PL Poland"
-    )
-    return WAITING_ADD_GEO
-
-
-async def add_geo_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = (update.effective_message.text or "").strip()
-    parts = text.split(maxsplit=1)
-    geo_code = normalize_geo_code(parts[0].upper() if parts else "")
-    geo_name = (parts[1].strip() if len(parts) > 1 else "") or (geo_code or "")
-    if not geo_code or not GEO_CODE_PATTERN.fullmatch(geo_code):
-        await update.effective_message.reply_text(
-            "Код GEO должен быть 2–12 символов (буквы, цифры, _ или -). Попробуйте снова."
-        )
-        return WAITING_ADD_GEO
-    try:
-        payload = GeoConfigPayload(
-            geo_name=geo_name or geo_code,
-            default_language=LANGUAGE_OPTIONS[0]["code"] if LANGUAGE_OPTIONS else "es",
-            refresh_minutes=DEFAULT_REFRESH_MINUTES,
-            default_manager_id=None,
-        )
-        save_geo_configuration(geo_code, payload)
-    except HTTPException as exc:
-        await update.effective_message.reply_text(str(exc.detail))
-        return WAITING_ADD_GEO
-    user_id = update.effective_user.id if update.effective_user else None
-    log_bot_activity(user_id, "add_geo", geo_code=geo_code)
-    await update.effective_message.reply_text(
-        f"GEO {geo_code} ({geo_name or geo_code}) создан. Добавьте реквизиты, чтобы использовать в ссылках.",
-        reply_markup=main_keyboard(get_bot_user_role(user_id)),
-    )
-    return ConversationHandler.END
-
-
 async def select_geo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await admin_check(update, "select_geo"):
         return ConversationHandler.END
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
     await update.effective_message.reply_text(
-        "Выберите новый GEO.",
+        f"Текущий GEO: {selected_geo}\nВыберите новый GEO.",
         reply_markup=geo_picker_keyboard(),
     )
     return WAITING_GEO_SELECTION
 
 
 async def select_geo_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    geo_code = sanitize_visible_geo_code(update.effective_message.text)
+    geo_code = sanitize_geo_code(update.effective_message.text)
     if not geo_code:
         available = ", ".join(profile["geo_code"] for profile in list_geo_profiles())
         await update.effective_message.reply_text(f"Выберите GEO из списка: {available}")
@@ -3328,8 +3270,78 @@ async def add_requisite_start(update: Update, context: ContextTypes.DEFAULT_TYPE
     return WAITING_ADD_REQ_GEO
 
 
+async def add_geo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await admin_check(update, "manage_access"):
+        return ConversationHandler.END
+    await update.effective_message.reply_text(build_add_geo_text())
+    return WAITING_NEW_GEO_DETAILS
+
+
+async def add_geo_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    incoming_text = update.effective_message.text
+    if is_menu_button_text(incoming_text):
+        await update.effective_message.reply_text(
+            "Создание GEO отменено. Нажмите нужную кнопку еще раз.",
+            reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
+        )
+        return ConversationHandler.END
+
+    lines = [line.strip() for line in incoming_text.strip().splitlines() if line.strip()]
+    if len(lines) < 3:
+        await update.effective_message.reply_text(
+            f"{build_add_geo_text()}\n\nНужно минимум 3 строки: код, название и язык."
+        )
+        return WAITING_NEW_GEO_DETAILS
+
+    geo_code = normalize_geo_code(lines[0])
+    if not geo_code:
+        await update.effective_message.reply_text("Код GEO должен содержать 2-12 символов: A-Z, 0-9, _ или -.")
+        return WAITING_NEW_GEO_DETAILS
+    if geo_code in set(list_known_geo_codes()):
+        await update.effective_message.reply_text(
+            f"GEO {geo_code} уже существует. Используйте админку, если хотите поменять его настройки."
+        )
+        return WAITING_NEW_GEO_DETAILS
+
+    geo_name = lines[1].strip()
+    if not geo_name:
+        await update.effective_message.reply_text("Название GEO не может быть пустым.")
+        return WAITING_NEW_GEO_DETAILS
+
+    default_language = sanitize_language_code(lines[2])
+    if not default_language:
+        available = ", ".join(item["code"] for item in LANGUAGE_OPTIONS)
+        await update.effective_message.reply_text(f"Язык должен быть одним из кодов: {available}")
+        return WAITING_NEW_GEO_DETAILS
+
+    timer_line = lines[3] if len(lines) >= 4 else "-"
+    refresh_minutes = DEFAULT_REFRESH_MINUTES if timer_line == "-" else parse_optional_int(timer_line)
+    if refresh_minutes is None or refresh_minutes < 1 or refresh_minutes > 120:
+        await update.effective_message.reply_text("Таймер должен быть числом от 1 до 120 или символом `-`.")
+        return WAITING_NEW_GEO_DETAILS
+
+    save_geo_configuration(
+        geo_code,
+        GeoConfigPayload(
+            geo_name=geo_name,
+            default_language=default_language,
+            refresh_minutes=refresh_minutes,
+            default_manager_id=None,
+        ),
+    )
+    user_id = update.effective_user.id if update.effective_user else None
+    context.user_data["selected_geo"] = geo_code
+    set_bot_admin_selected_geo(user_id, geo_code)
+    log_bot_activity(user_id, "create_geo", geo_code=geo_code, payload=geo_name)
+    await update.effective_message.reply_text(
+        f"GEO {geo_code} создан.\n\n{build_geo_details_text(geo_code)}",
+        reply_markup=main_keyboard(get_bot_user_role(user_id)),
+    )
+    return ConversationHandler.END
+
+
 async def add_req_geo_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    geo_code = sanitize_visible_geo_code(update.effective_message.text)
+    geo_code = sanitize_geo_code(update.effective_message.text)
     if not geo_code:
         available = ", ".join(p["geo_code"] for p in list_geo_profiles())
         await update.effective_message.reply_text(f"Выберите GEO из списка: {available}")
@@ -3344,6 +3356,7 @@ async def add_req_geo_received(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return WAITING_REQUISITES
     await update.effective_message.reply_text(
+        f"Текущий GEO: {geo_code}\n"
         f"Банк: {requisites['bank_name']}\n"
         f"IBAN: {requisites['card_number']}\n"
         f"BIC / SWIFT: {requisites['bic_swift'] or 'не указан'}\n"
@@ -3371,6 +3384,7 @@ async def change_reqs_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return WAITING_REQUISITES
     await update.effective_message.reply_text(
+        f"Текущий GEO: {selected_geo}\n"
         f"Банк: {requisites['bank_name']}\n"
         f"IBAN: {requisites['card_number']}\n"
         f"BIC / SWIFT: {requisites['bic_swift'] or 'не указан'}\n"
@@ -3447,7 +3461,7 @@ async def show_requisites_delete_start(update: Update, context: ContextTypes.DEF
 
 
 async def delete_req_geo_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    geo_code = sanitize_visible_geo_code(update.effective_message.text)
+    geo_code = sanitize_geo_code(update.effective_message.text)
     if not geo_code:
         available = ", ".join(p["geo_code"] for p in list_geo_profiles())
         await update.effective_message.reply_text(f"Выберите GEO из списка: {available}")
@@ -3604,6 +3618,7 @@ async def change_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
     manager_link = manager.get("manager_telegram_url") or "не указан"
     if manager.get("id"):
         await update.effective_message.reply_text(
+            f"Текущий GEO: {selected_geo}\n"
             f"Менеджер по умолчанию: {manager_name}\n"
             f"Telegram: {manager_link}\n\n"
             "Выберите действие: оставить текущего или добавить нового.",
@@ -3612,6 +3627,7 @@ async def change_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
         return WAITING_MANAGER_ACTION
 
     await update.effective_message.reply_text(
+        f"Текущий GEO: {selected_geo}\n"
         f"Менеджер по умолчанию: {manager_name}\n"
         f"Telegram: {manager_link}\n\n"
         "Отправьте две строки:\n"
@@ -3634,6 +3650,7 @@ async def change_manager_action(update: Update, context: ContextTypes.DEFAULT_TY
         return ConversationHandler.END
     if choice in {MANAGER_ADD_OPTION, MANAGER_EDIT_OPTION_LEGACY}:
         await update.effective_message.reply_text(
+            f"Текущий GEO: {selected_geo}\n"
             "Отправьте две строки:\n"
             "Имя менеджера\n"
             "Telegram-ссылка менеджера",
@@ -3724,8 +3741,10 @@ async def send_ready_payment_link(
     context.user_data.pop("temp_manager_link", None)
     context.user_data.pop("temp_language", None)
     context.user_data.pop("temp_label", None)
+    context.user_data.pop("temp_comment", None)
 
     log_bot_activity(user_id, "create_link", geo_code=selected_geo, payload=f"{amount:.2f}")
+    language_label = LANDING_COMMENT_BUTTON_BY_CODE.get(forced_language or "", forced_language or "auto")
     await update.effective_message.reply_text(
         f"Ссылка готова.\n\n"
         f"Сумма: {amount:.2f} {sanitize_currency_code(currency_code) or DEFAULT_CURRENCY}\n"
@@ -3733,7 +3752,7 @@ async def send_ready_payment_link(
         f"Обработчик: {handler.get('manager_name') or 'не выбран'}\n"
         f"Комментарий для платежа: {clean_label or 'не указан'}\n"
         f"Комментарий для лендинга: {clean_comment or 'не указан'}\n"
-        f"Язык лендинга: {forced_language or 'auto'}\n"
+        f"Язык лендинга: {language_label}\n"
         f"Ссылка: {link}",
         reply_markup=main_keyboard(get_bot_user_role(user_id)),
     )
@@ -3744,7 +3763,6 @@ async def create_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not await admin_check(update, "create_link"):
         return ConversationHandler.END
     user_id = update.effective_user.id if update.effective_user else None
-    selected_geo = get_selected_geo(context, user_id)
     context.user_data.pop("temp_amount", None)
     context.user_data.pop("temp_requisites_id", None)
     context.user_data.pop("temp_manager_id", None)
@@ -3754,9 +3772,7 @@ async def create_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data.pop("temp_comment", None)
     context.user_data.pop("temp_currency", None)
     context.user_data.pop("temp_geo", None)
-    await update.effective_message.reply_text(
-        "Введите сумму к оплате, например: 250"
-    )
+    await update.effective_message.reply_text("Введите сумму к оплате, например: 250")
     return WAITING_LINK_AMOUNT
 
 
@@ -3797,7 +3813,7 @@ async def create_link_currency(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def create_link_requisites(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    geo_code = sanitize_visible_geo_code(update.effective_message.text)
+    geo_code = sanitize_geo_code(update.effective_message.text)
     if not geo_code or not geo_has_requisites(geo_code):
         available = ", ".join(list_geo_codes_with_requisites())
         await update.effective_message.reply_text(
@@ -3830,8 +3846,30 @@ async def create_link_manager(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     context.user_data["temp_manager_id"] = handler.get("id")
     context.user_data["temp_manager_link"] = handler.get("manager_telegram_url")
-    await update.effective_message.reply_text(build_link_language_selection_text())
-    return WAITING_LINK_LANGUAGE
+    amount = float(context.user_data.get("temp_amount", 0))
+    user_id = update.effective_user.id if update.effective_user else None
+    selected_geo = str(context.user_data.get("temp_geo") or get_selected_geo(context, user_id))
+    requisites_id = context.user_data.get("temp_requisites_id")
+    manager_id = context.user_data.get("temp_manager_id")
+    manager_link = normalize_manager_link(context.user_data.get("temp_manager_link"))
+    clean_label = str(context.user_data.get("temp_label", ""))
+    clean_comment = str(context.user_data.get("temp_comment", ""))
+    currency_code = context.user_data.get("temp_currency")
+    safe_language = sanitize_language_code(context.user_data.get("temp_language"))
+    return await send_ready_payment_link(
+        update,
+        context,
+        amount=amount,
+        user_id=user_id,
+        selected_geo=selected_geo,
+        currency_code=currency_code,
+        requisites_id=requisites_id,
+        manager_id=manager_id,
+        manager_link=manager_link,
+        forced_language=safe_language,
+        clean_label=clean_label,
+        clean_comment=clean_comment,
+    )
 
 
 async def create_link_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -3872,27 +3910,30 @@ async def create_link_label(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     label = update.effective_message.text.strip()
     context.user_data["temp_label"] = "" if label == "-" else sanitize_payment_label(label)
     await update.effective_message.reply_text(
-        "На каком языке комментарий для лендинга?",
-        reply_markup=landing_comment_keyboard(),
+        build_landing_comment_selection_text(),
+        reply_markup=landing_comment_picker_keyboard(),
     )
     return WAITING_LINK_COMMENT
 
 
 async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    choice = update.effective_message.text.strip()
-    if choice not in LANDING_COMMENT_BY_BUTTON:
-        labels = ", ".join(label for _lang, label, _text in LANDING_COMMENT_OPTIONS)
+    selected_option = LANDING_COMMENT_BY_BUTTON.get(update.effective_message.text.strip().casefold())
+    if selected_option is None:
         await update.effective_message.reply_text(
-            f"Выберите язык кнопкой: {labels}",
-            reply_markup=landing_comment_keyboard(),
+            "Нужно выбрать язык кнопкой ниже.",
+            reply_markup=landing_comment_picker_keyboard(),
         )
         return WAITING_LINK_COMMENT
-    context.user_data["temp_comment"] = LANDING_COMMENT_BY_BUTTON[choice]
+
+    context.user_data["temp_comment"] = selected_option["comment"]
+    context.user_data["temp_language"] = selected_option["code"]
     selected_geo = str(context.user_data.get("temp_geo") or "")
+    user_id = update.effective_user.id if update.effective_user else None
     await update.effective_message.reply_text(
-        "Для ссылки будет зафиксирован текущий активный комплект реквизитов.\n"
+        f"Для ссылки будет зафиксирован текущий активный комплект реквизитов GEO {selected_geo}.\n"
         "Теперь выберите ответственного обработчика.\n\n"
-        f"{build_link_manager_selection_text(selected_geo)}"
+        f"{build_link_manager_selection_text(selected_geo)}",
+        reply_markup=main_keyboard(get_bot_user_role(user_id)),
     )
     return WAITING_LINK_MANAGER
 
@@ -3935,20 +3976,20 @@ if bot_app is not None:
             MessageHandler(filters.Regex(MENU_BUTTONS_PATTERN), cancel_cmd),
         ],
     )
-    conv_handler_delete_req = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(DELETE_REQUISITE_BTN)}$"), show_requisites_delete_start)],
+    conv_handler_add_geo = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(ADD_GEO_BTN)}$"), add_geo_start)],
         states={
-            WAITING_DELETE_REQ_GEO: [MessageHandler(conversation_text_filter, delete_req_geo_received)],
+            WAITING_NEW_GEO_DETAILS: [MessageHandler(conversation_text_filter, add_geo_save)],
         },
         fallbacks=[
             CommandHandler("cancel", cancel_cmd),
             MessageHandler(filters.Regex(MENU_BUTTONS_PATTERN), cancel_cmd),
         ],
     )
-    conv_handler_add_geo = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(ADD_GEO_BTN)}$"), add_geo_start)],
+    conv_handler_delete_req = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{re.escape(DELETE_REQUISITE_BTN)}$"), show_requisites_delete_start)],
         states={
-            WAITING_ADD_GEO: [MessageHandler(conversation_text_filter, add_geo_received)],
+            WAITING_DELETE_REQ_GEO: [MessageHandler(conversation_text_filter, delete_req_geo_received)],
         },
         fallbacks=[
             CommandHandler("cancel", cancel_cmd),
@@ -3964,7 +4005,6 @@ if bot_app is not None:
             WAITING_LINK_LABEL: [MessageHandler(conversation_text_filter, create_link_label)],
             WAITING_LINK_COMMENT: [MessageHandler(conversation_text_filter, create_link_comment)],
             WAITING_LINK_MANAGER: [MessageHandler(conversation_text_filter, create_link_manager)],
-            WAITING_LINK_LANGUAGE: [MessageHandler(conversation_text_filter, create_link_language)],
         },
         fallbacks=[
             CommandHandler("cancel", cancel_cmd),
@@ -3989,8 +4029,8 @@ if bot_app is not None:
     bot_app.add_handler(conv_handler_geo)
     bot_app.add_handler(conv_handler_req)
     bot_app.add_handler(conv_handler_add_req)
-    bot_app.add_handler(conv_handler_delete_req)
     bot_app.add_handler(conv_handler_add_geo)
+    bot_app.add_handler(conv_handler_delete_req)
     bot_app.add_handler(conv_handler_link)
 
 
