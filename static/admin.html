@@ -480,7 +480,7 @@
                         <div class="info-trigger">
                             <button type="button" class="info-button" aria-label="Описание блока каналов">i</button>
                             <div class="info-text">
-                                Создай канал с названием и логотипом, затем привяжи его к обработчику. После этого лендинг автоматически покажет логотип и название канала.
+                                Можно добавить любое количество каналов с названием и логотипом. Привяжи канал к обработчику — лендинг покажет его логотип и название. Чтобы добавить ещё один канал, нажми «Добавить канал» и заполни форму.
                             </div>
                         </div>
                     </div>
@@ -518,6 +518,7 @@
                             <button type="submit" class="rounded-full bg-white px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-black">Сохранить канал</button>
                             <button type="button" @click="resetChannelForm()" class="rounded-full border border-white/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.28em] text-white">Очистить</button>
                         </div>
+                        <p class="text-xs text-zinc-500">Редактирование: нажми «Изменить» у канала в списке. Новый канал: нажми «Добавить канал» ниже или «Очистить», затем введите название и логотип.</p>
                     </form>
 
                     <div class="mt-5 space-y-3">
@@ -546,6 +547,11 @@
                                 </div>
                             </div>
                         </template>
+                        <div class="mt-4">
+                            <button type="button" @click="addNewChannel()" class="w-full rounded-[1.4rem] border-2 border-dashed border-sky-400/40 bg-sky-500/10 px-4 py-5 text-sm font-semibold text-sky-200 transition hover:border-sky-400/60 hover:bg-sky-500/20">
+                                ➕ Добавить канал
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -1515,6 +1521,13 @@
                         logo_preview: ""
                     };
                     this.channelMessage = "";
+                },
+
+                addNewChannel() {
+                    this.resetChannelForm();
+                    this.$nextTick(() => {
+                        document.getElementById("channel-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                    });
                 },
 
                 async saveChannel() {

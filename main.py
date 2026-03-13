@@ -309,6 +309,8 @@ DEFAULT_GEO_CONFIGS = {
 SUPPORTED_GEOS = tuple(DEFAULT_GEO_CONFIGS.keys())
 SUPPORTED_GEO_SET = set(SUPPORTED_GEOS)
 GEO_CODE_PATTERN = re.compile(r"^[A-Z0-9_-]{2,12}$")
+# В боте «Выбрать GEO» показываются только эти три региона (Испания, Германия, Литва)
+BOT_SELECT_GEO_WHITELIST = ("DE", "ES", "LT")
 
 
 class AdminLoginPayload(BaseModel):
@@ -2860,6 +2862,14 @@ def geo_picker_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True)
 
 
+def bot_select_geo_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура «Выбрать GEO» в боте: только DE, ES, LT (из существующих профилей)."""
+    all_profiles = {p["geo_code"]: p for p in list_geo_profiles()}
+    codes = [c for c in BOT_SELECT_GEO_WHITELIST if c in all_profiles]
+    rows = [codes[index:index + 3] for index in range(0, len(codes), 3)] or [["ES"]]
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True)
+
+
 def geo_picker_with_requisites_keyboard() -> ReplyKeyboardMarkup:
     codes = list_geo_codes_with_requisites()
     rows = [codes[index:index + 3] for index in range(0, len(codes), 3)] or [["ES"]]
@@ -3321,7 +3331,7 @@ async def select_geo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     selected_geo = get_selected_geo(context, user_id)
     await update.effective_message.reply_text(
         "Выберите регион.",
-        reply_markup=geo_picker_keyboard(),
+        reply_markup=bot_select_geo_keyboard(),
     )
     return WAITING_GEO_SELECTION
 
@@ -3329,8 +3339,14 @@ async def select_geo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def select_geo_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     geo_code = sanitize_geo_code(update.effective_message.text)
     if not geo_code:
-        available = ", ".join(profile["geo_code"] for profile in list_geo_profiles())
-        await update.effective_message.reply_text(f"Выберите регион из списка: {available}")
+        available = ", ".join(c for c in BOT_SELECT_GEO_WHITELIST)
+        await update.effective_message.reply_text(f"Выберите регион из списка: {available}", reply_markup=bot_select_geo_keyboard())
+        return WAITING_GEO_SELECTION
+    if geo_code not in BOT_SELECT_GEO_WHITELIST:
+        await update.effective_message.reply_text(
+            f"В этом меню доступны только: {', '.join(BOT_SELECT_GEO_WHITELIST)}.",
+            reply_markup=bot_select_geo_keyboard(),
+        )
         return WAITING_GEO_SELECTION
 
     context.user_data["selected_geo"] = geo_code
