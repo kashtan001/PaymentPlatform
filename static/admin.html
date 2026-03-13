@@ -649,7 +649,7 @@
                                 </p>
                             </div>
 
-                            <form class="mt-5 space-y-4 rounded-[1.5rem] border border-white/10 bg-black/10 p-4" @submit.prevent="createGeo">
+                            <form x-show="can('add_geo')" class="mt-5 space-y-4 rounded-[1.5rem] border border-white/10 bg-black/10 p-4" @submit.prevent="createGeo">
                                 <div>
                                     <p class="text-sm font-semibold text-white">Добавить новое GEO</p>
                                     <p class="mt-1 text-sm text-zinc-400">Новое GEO появится в админке сразу. В генератор ссылок оно попадёт только после добавления реквизитов.</p>
@@ -1036,7 +1036,7 @@
                 newGeoForm: {
                     geo_code: "",
                     geo_name: "",
-                    default_language: "en",
+                    default_language: "es",
                     refresh_minutes: 15
                 },
                 channelMessage: "",
@@ -1160,7 +1160,7 @@
                     }
                     this.geoForm = {
                         geo_name: current.profile.geo_name || "",
-                        default_language: current.profile.default_language || "en",
+                        default_language: current.profile.default_language || "es",
                         refresh_minutes: current.profile.refresh_minutes || 15,
                         default_manager_id: current.profile.default_manager_id ? String(current.profile.default_manager_id) : ""
                     };

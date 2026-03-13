@@ -136,6 +136,12 @@
             line-height: 1.35;
             letter-spacing: 0.03em;
         }
+
+        .copy-btn {
+            transform: scale(0.7);
+            transform-origin: top right;
+            flex-shrink: 0;
+        }
     </style>
 </head>
 <body x-data="landingApp()" x-init="init()">
@@ -247,47 +253,47 @@
                     <p class="mt-3 text-sm leading-6 text-slate-600" x-text="copy.paymentDetailsHint"></p>
 
                     <div class="mt-6 overflow-hidden rounded-[1.5rem] border border-[var(--line)] bg-white">
-                        <div class="detail-row flex items-center justify-between gap-4 px-5 py-5 sm:px-6">
-                            <div class="min-w-0">
+                        <div class="detail-row flex items-start justify-between gap-4 px-5 py-5 sm:px-6">
+                            <div class="min-w-0 flex-1">
                                 <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.bank"></p>
                                 <p class="detail-value-strong mt-2 font-semibold text-slate-950" x-text="requisites.bank_name"></p>
                             </div>
                             <button type="button" @click="copyField('bank', requisites.bank_name)"
-                                    class="rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition"
+                                    class="copy-btn rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition"
                                     :class="copiedField === 'bank' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800'"
                                     x-text="copiedField === 'bank' ? '✓ ' + copy.copied : copy.copyAction"></button>
                         </div>
 
-                        <div class="detail-row flex items-center justify-between gap-4 px-5 py-5 sm:px-6">
-                            <div class="min-w-0">
+                        <div class="detail-row flex items-start justify-between gap-4 px-5 py-5 sm:px-6">
+                            <div class="min-w-0 flex-1">
                                 <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.account"></p>
                                 <p class="detail-value-mono mt-2 font-mono font-semibold text-slate-950" x-text="requisites.card_number"></p>
                             </div>
                             <button type="button" @click="copyField('card', requisites.card_number)"
-                                    class="rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition"
+                                    class="copy-btn rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition"
                                     :class="copiedField === 'card' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800'"
                                     x-text="copiedField === 'card' ? '✓ ' + copy.copied : copy.copyAction"></button>
                         </div>
 
-                        <div class="detail-row flex items-center justify-between gap-4 px-5 py-5 sm:px-6">
-                            <div class="min-w-0">
+                        <div class="detail-row flex items-start justify-between gap-4 px-5 py-5 sm:px-6">
+                            <div class="min-w-0 flex-1">
                                 <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400">BIC / SWIFT</p>
                                 <p class="detail-value-mono mt-2 font-mono font-medium text-slate-950" x-text="requisites.bic_swift || '—'"></p>
                             </div>
                             <button type="button" @click="copyField('bic', requisites.bic_swift)"
-                                    class="rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition"
+                                    class="copy-btn rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition"
                                     :disabled="!requisites.bic_swift"
                                     :class="!requisites.bic_swift ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : (copiedField === 'bic' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800')"
                                     x-text="copiedField === 'bic' ? '✓ ' + copy.copied : copy.copyAction"></button>
                         </div>
 
-                        <div class="detail-row flex items-center justify-between gap-4 px-5 py-5 sm:px-6">
-                            <div class="min-w-0">
+                        <div class="detail-row flex items-start justify-between gap-4 px-5 py-5 sm:px-6">
+                            <div class="min-w-0 flex-1">
                                 <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.receiver"></p>
                                 <p class="detail-value-strong mt-2 font-semibold text-slate-950" x-text="requisites.receiver_name"></p>
                             </div>
                             <button type="button" @click="copyField('receiver', requisites.receiver_name)"
-                                    class="rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition"
+                                    class="copy-btn rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition"
                                     :class="copiedField === 'receiver' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800'"
                                     x-text="copiedField === 'receiver' ? '✓ ' + copy.copied : copy.copyAction"></button>
                         </div>
@@ -366,58 +372,18 @@
             : "http://127.0.0.1:8000";
 
         const localeMap = {
-            en: "en-GB",
             es: "es-ES",
-            it: "it-IT",
             de: "de-DE",
-            fr: "fr-FR",
-            ro: "ro-RO"
+            lt: "lt-LT"
         };
 
         const languageCatalog = [
-            { code: "en", label: "English" },
             { code: "es", label: "Español" },
-            { code: "it", label: "Italiano" },
             { code: "de", label: "Deutsch" },
-            { code: "fr", label: "Français" },
-            { code: "ro", label: "Română" }
+            { code: "lt", label: "Lietuvių" }
         ];
 
         const translations = {
-            en: {
-                loading: "Loading",
-                chooseLanguage: "Choose language",
-                defaultLanguage: "Default:",
-                close: "Close",
-                invalidTitle: "This payment link is incomplete",
-                invalidText: "Ask for a valid payment link with the amount included.",
-                missingManagerTitle: "This payment page is unavailable",
-                missingManagerText: "This payment link cannot be used yet because no Telegram contact is configured.",
-                missingRequisitesTitle: "This payment page is unavailable",
-                missingRequisitesText: "There are currently no payment details configured for this GEO.",
-                expiredTitle: "Time expired",
-                expiredText: "This payment link is no longer active. Request a new payment link.",
-                bankTransfer: "Bank transfer",
-                paymentPurpose: "Payment purpose",
-                paymentComment: "Important!",
-                timerLabel: "Details refresh in",
-                timerLive: "Live",
-                timerText: "When the timer ends, this link becomes inactive. Request a new link.",
-                paymentDetails: "Payment details",
-                paymentDetailsTitle: "Transfer using the details below",
-                paymentDetailsHint: "Copy the bank details exactly as shown on this page.",
-                bank: "Bank",
-                account: "IBAN",
-                receiver: "Receiver",
-                copyAction: "Copy",
-                copied: "Copied",
-                afterPayment: "After payment",
-                afterPaymentTitle: "Send the receipt after payment",
-                afterPaymentHint: "Send the receipt to the Telegram contact after the transfer is complete.",
-                paidAction: "Paid",
-                managerButton: "Open Telegram",
-                managerUnavailable: "Telegram contact link is not configured yet."
-            },
             es: {
                 loading: "Cargando",
                 chooseLanguage: "Elegir idioma",
@@ -451,40 +417,6 @@
                 paidAction: "Pagado",
                 managerButton: "Abrir Telegram",
                 managerUnavailable: "El enlace del contacto de Telegram aún no está configurado."
-            },
-            it: {
-                loading: "Caricamento",
-                chooseLanguage: "Scegli lingua",
-                defaultLanguage: "Predefinita:",
-                close: "Chiudi",
-                invalidTitle: "Questo link di pagamento è incompleto",
-                invalidText: "Chiedi un link corretto con l'importo già incluso.",
-                missingManagerTitle: "Questa pagina di pagamento non e disponibile",
-                missingManagerText: "Questo link non puo essere usato finche non viene configurato un contatto Telegram.",
-                missingRequisitesTitle: "Questa pagina di pagamento non e disponibile",
-                missingRequisitesText: "Al momento non ci sono coordinate di pagamento disponibili per questo GEO.",
-                expiredTitle: "Tempo scaduto",
-                expiredText: "Questo link di pagamento non è più attivo. Richiedi un nuovo link.",
-                bankTransfer: "Bonifico bancario",
-                paymentPurpose: "Causale",
-                paymentComment: "Importante!",
-                timerLabel: "I dati si aggiorneranno tra",
-                timerLive: "Attivo",
-                timerText: "Quando il timer termina, questo link diventa inattivo. Richiedi un nuovo link.",
-                paymentDetails: "Dettagli di pagamento",
-                paymentDetailsTitle: "Effettua il trasferimento con questi dati",
-                paymentDetailsHint: "Copia i dati esattamente come sono mostrati in questa pagina.",
-                bank: "Banca",
-                account: "IBAN",
-                receiver: "Beneficiario",
-                copyAction: "Copia",
-                copied: "Copiato",
-                afterPayment: "Dopo il pagamento",
-                afterPaymentTitle: "Invia la ricevuta dopo il pagamento",
-                afterPaymentHint: "Dopo il bonifico, invia la ricevuta al contatto Telegram.",
-                paidAction: "Pagato",
-                managerButton: "Apri Telegram",
-                managerUnavailable: "Il link del contatto Telegram non è ancora configurato."
             },
             de: {
                 loading: "Wird geladen",
@@ -520,73 +452,39 @@
                 managerButton: "Telegram öffnen",
                 managerUnavailable: "Der Telegram-Link des Kontakts ist noch nicht eingerichtet."
             },
-            fr: {
-                loading: "Chargement",
-                chooseLanguage: "Choisir la langue",
-                defaultLanguage: "Par défaut :",
-                close: "Fermer",
-                invalidTitle: "Ce lien de paiement est incomplet",
-                invalidText: "Demandez un lien valide avec le montant déjà inclus.",
-                missingManagerTitle: "Cette page de paiement n'est pas disponible",
-                missingManagerText: "Ce lien ne peut pas encore etre utilise car aucun contact Telegram n'est configure.",
-                missingRequisitesTitle: "Cette page de paiement n'est pas disponible",
-                missingRequisitesText: "Aucun detail de paiement n'est actuellement configure pour ce GEO.",
-                expiredTitle: "Temps expiré",
-                expiredText: "Ce lien de paiement n'est plus actif. Demandez un nouveau lien.",
-                bankTransfer: "Virement bancaire",
-                paymentPurpose: "Objet du paiement",
-                paymentComment: "Important !",
-                timerLabel: "Les coordonnees seront actualisees dans",
-                timerLive: "Actif",
-                timerText: "Quand le minuteur se termine, ce lien devient inactif. Demandez un nouveau lien.",
-                paymentDetails: "Coordonnées de paiement",
-                paymentDetailsTitle: "Effectuez le virement avec les coordonnées ci-dessous",
-                paymentDetailsHint: "Copiez les coordonnées exactement comme elles apparaissent sur cette page.",
-                bank: "Banque",
+            lt: {
+                loading: "Kraunama",
+                chooseLanguage: "Pasirinkite kalbą",
+                defaultLanguage: "Numatyta:",
+                close: "Uždaryti",
+                invalidTitle: "Ši mokėjimo nuoroda nepilna",
+                invalidText: "Paprašykite galiojančios nuorodos su nurodyta suma.",
+                missingManagerTitle: "Šis mokėjimo puslapis nepasiekiamas",
+                missingManagerText: "Šios nuorodos dar negalima naudoti, nes Telegram kontaktas nesukonfigūruotas.",
+                missingRequisitesTitle: "Šis mokėjimo puslapis nepasiekiamas",
+                missingRequisitesText: "Šiuo metu šiam GEO nėra sukonfigūruotų mokėjimo duomenų.",
+                expiredTitle: "Laikas baigėsi",
+                expiredText: "Ši mokėjimo nuoroda nebeaktyvi. Paprašykite naujos nuorodos.",
+                bankTransfer: "Banko pavedimas",
+                paymentPurpose: "Mokėjimo paskirtis",
+                paymentComment: "Svarbu!",
+                timerLabel: "Duomenys atnaujins per",
+                timerLive: "Aktyvus",
+                timerText: "Kai laikmatis baigsis, ši nuoroda taps neaktyvi. Paprašykite naujos nuorodos.",
+                paymentDetails: "Mokėjimo duomenys",
+                paymentDetailsTitle: "Perveskite naudodami žemiau pateiktus duomenis",
+                paymentDetailsHint: "Nukopijuokite banko duomenis tiksliai taip, kaip parodyta šiame puslapyje.",
+                bank: "Bankas",
                 account: "IBAN",
-                receiver: "Bénéficiaire",
-                copyAction: "Copier",
-                copied: "Copié",
-                afterPayment: "Après le paiement",
-                afterPaymentTitle: "Envoyez le reçu après le paiement",
-                afterPaymentHint: "Une fois le virement effectué, envoyez le reçu au contact Telegram.",
-                paidAction: "Payé",
-                managerButton: "Ouvrir Telegram",
-                managerUnavailable: "Le lien Telegram du contact n'est pas encore configuré."
-            },
-            ro: {
-                loading: "Se încarcă",
-                chooseLanguage: "Alege limba",
-                defaultLanguage: "Implicit:",
-                close: "Închide",
-                invalidTitle: "Acest link de plată este incomplet",
-                invalidText: "Cere un link valid de plată cu suma inclusă.",
-                missingManagerTitle: "Această pagină de plată nu este disponibilă",
-                missingManagerText: "Acest link nu poate fi folosit încă deoarece nu este configurat niciun contact Telegram.",
-                missingRequisitesTitle: "Această pagină de plată nu este disponibilă",
-                missingRequisitesText: "Momentan nu există detalii de plată configurate pentru acest GEO.",
-                expiredTitle: "Timp expirat",
-                expiredText: "Acest link de plată nu mai este activ. Cere un nou link.",
-                bankTransfer: "Transfer bancar",
-                paymentPurpose: "Detalii plată",
-                paymentComment: "Important!",
-                timerLabel: "Datele se vor actualiza în",
-                timerLive: "Activ",
-                timerText: "Când cronometrul se termină, acest link devine inactiv. Cere un nou link.",
-                paymentDetails: "Detalii de plată",
-                paymentDetailsTitle: "Efectuați transferul folosind datele de mai jos",
-                paymentDetailsHint: "Copiați datele bancare exact așa cum apar pe această pagină.",
-                bank: "Bancă",
-                account: "IBAN",
-                receiver: "Beneficiar",
-                copyAction: "Copiază",
-                copied: "Copiat",
-                afterPayment: "După plată",
-                afterPaymentTitle: "Trimiteți dovada după plată",
-                afterPaymentHint: "După transfer, trimiteți dovada contactului Telegram.",
-                paidAction: "Plătit",
-                managerButton: "Deschide Telegram",
-                managerUnavailable: "Linkul contactului Telegram nu este configurat încă."
+                receiver: "Gavėjas",
+                copyAction: "Kopijuoti",
+                copied: "Nukopijuota",
+                afterPayment: "Po mokėjimo",
+                afterPaymentTitle: "Atsiųskite kvitą po mokėjimo",
+                afterPaymentHint: "Atlikę pavedimą, atsiųskite kvitą Telegram kontaktui.",
+                paidAction: "Sumokėta",
+                managerButton: "Atidaryti Telegram",
+                managerUnavailable: "Telegram kontakto nuoroda dar nesukonfigūruota."
             }
         };
 
@@ -595,8 +493,8 @@
                 loading: true,
                 showLanguages: false,
                 showAfterPayment: false,
-                currentLang: "en",
-                recommendedLanguage: "en",
+                currentLang: "es",
+                recommendedLanguage: "es",
                 mode: "invalid",
                 invalidReason: "",
                 visitor: {},
@@ -606,7 +504,7 @@
                 countdownTimerId: null,
                 timeLeftSeconds: 0,
                 availableLanguages: languageCatalog,
-                copy: translations.en,
+                copy: translations.es,
                 geo: {
                     geo_code: "ES",
                     geo_name: "Spain",
@@ -647,7 +545,7 @@
                     this.visitor = context.visitor || {};
                     this.visitToken = String(context.visit?.token || "");
                     this.availableLanguages = context.available_languages || languageCatalog;
-                    this.recommendedLanguage = this.resolveLanguageCode(context.recommended_language || this.geo.default_language || "en");
+                    this.recommendedLanguage = this.resolveLanguageCode(context.recommended_language || this.geo.default_language || "es");
 
                     const queryParams = new URLSearchParams(window.location.search);
                     const queryLang = queryParams.get("lang");
@@ -655,10 +553,10 @@
                     const hasPaymentLink = queryParams.has("link");
                     const storedLang = window.localStorage.getItem("dream-team-language");
                     const initialLanguage = hasPaymentLink
-                        ? this.resolveLanguageCode(queryLang || this.recommendedLanguage || "en")
+                        ? this.resolveLanguageCode(queryLang || this.recommendedLanguage || "es")
                         : (explicitGeo
-                            ? this.resolveLanguageCode(queryLang || this.recommendedLanguage || "en")
-                            : this.resolveLanguageCode(queryLang || storedLang || this.recommendedLanguage || "en"));
+                            ? this.resolveLanguageCode(queryLang || this.recommendedLanguage || "es")
+                            : this.resolveLanguageCode(queryLang || storedLang || this.recommendedLanguage || "es"));
                     this.applyLanguage(initialLanguage);
 
                     this.restartCountdown(Number(context.timer?.refresh_seconds || this.geo.refresh_seconds || 0));
@@ -680,7 +578,7 @@
                     } catch (error) {
                         return {
                             mode: "invalid",
-                            recommended_language: "en",
+                            recommended_language: "es",
                             available_languages: languageCatalog,
                             payment: this.payment,
                             geo: this.geo,
@@ -698,13 +596,13 @@
                 },
 
                 resolveLanguageCode(languageCode) {
-                    return translations[languageCode] ? languageCode : "en";
+                    return translations[languageCode] ? languageCode : "es";
                 },
 
                 applyLanguage(languageCode) {
                     const safe = this.resolveLanguageCode(languageCode);
                     this.currentLang = safe;
-                    this.copy = { ...translations.en, ...(translations[safe] || {}) };
+                    this.copy = { ...translations.es, ...(translations[safe] || {}) };
                     document.documentElement.lang = safe;
                     window.localStorage.setItem("dream-team-language", safe);
                 },
@@ -784,7 +682,7 @@
                     if (this.payment.amount === null || this.payment.amount === undefined) {
                         return "—";
                     }
-                    const locale = localeMap[this.currentLang] || "en-GB";
+                    const locale = localeMap[this.currentLang] || "es-ES";
                     return new Intl.NumberFormat(locale, {
                         style: "currency",
                         currency: this.payment.currency || "EUR",
