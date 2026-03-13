@@ -30,7 +30,13 @@ from telegram.ext import (
 # --- PATHS & CONFIG ---
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-CHANNEL_LOGO_DIR = STATIC_DIR / "uploads" / "channel-logos"
+# Volume mount path (e.g. /data) — логотипы сохраняются в {UPLOADS_VOLUME_PATH}/channel-logos
+# Railway: добавьте переменную UPLOADS_VOLUME_PATH=/data
+UPLOADS_VOLUME_PATH = os.getenv("UPLOADS_VOLUME_PATH", "").strip() or os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+if UPLOADS_VOLUME_PATH:
+    CHANNEL_LOGO_DIR = Path(UPLOADS_VOLUME_PATH) / "channel-logos"
+else:
+    CHANNEL_LOGO_DIR = STATIC_DIR / "uploads" / "channel-logos"
 
 
 def resolve_db_file() -> Path:
@@ -141,13 +147,21 @@ MAX_LOGIN_ATTEMPTS = 5
 
 LANGUAGE_OPTIONS = [
     {"code": "es", "label": "Español"},
+    {"code": "en", "label": "English"},
     {"code": "de", "label": "Deutsch"},
     {"code": "fr", "label": "Français"},
     {"code": "ro", "label": "Română"},
     {"code": "it", "label": "Italiano"},
+    {"code": "lt", "label": "Lietuvių"},
+    {"code": "pl", "label": "Polski"},
 ]
 FALLBACK_LANGUAGE_CODE = LANGUAGE_OPTIONS[0]["code"]
 LANDING_COMMENT_OPTIONS = [
+    {
+        "code": "en",
+        "button": "Английский",
+        "comment": "Only INSTANT TRANSFERS are accepted",
+    },
     {
         "code": "de",
         "button": "Немецкий",
@@ -172,6 +186,16 @@ LANDING_COMMENT_OPTIONS = [
         "code": "it",
         "button": "Итальянский",
         "comment": "È accettato solo PAGAMENTO ISTANTANEO",
+    },
+    {
+        "code": "lt",
+        "button": "Литовский",
+        "comment": "Priimami tik AKIMIRKŠNIAI PERVEDIMAI",
+    },
+    {
+        "code": "pl",
+        "button": "Польский",
+        "comment": "Akceptowane są tylko NATYCHMIASTOWE PRZELEWY",
     },
 ]
 LANDING_COMMENT_BY_BUTTON = {
@@ -209,22 +233,34 @@ BOT_ROLE_PERMISSIONS = {
     },
 }
 LANGUAGE_TO_GEO_MAP = {
+    "en": "EN",
     "es": "ES",
     "ca": "ES",
     "eu": "ES",
     "gl": "ES",
     "de": "DE",
+    "fr": "FR",
+    "it": "IT",
     "lt": "LT",
+    "pl": "PL",
 }
 SPECIAL_LANGUAGE_MAP = {
     "nb": "no",
     "nn": "no",
 }
 DEFAULT_GEO_CONFIGS = {
-    "LT": {
-        "geo_name": "Lithuania",
-        "default_language": "lt",
-        "manager_name": "Lithuania manager",
+    "DE": {
+        "geo_name": "Germany",
+        "default_language": "de",
+        "manager_name": "Germany manager",
+        "manager_telegram_url": "",
+        "default_manager_id": None,
+        "refresh_minutes": DEFAULT_REFRESH_MINUTES,
+    },
+    "EN": {
+        "geo_name": "English",
+        "default_language": "en",
+        "manager_name": "English manager",
         "manager_telegram_url": "",
         "default_manager_id": None,
         "refresh_minutes": DEFAULT_REFRESH_MINUTES,
@@ -237,10 +273,34 @@ DEFAULT_GEO_CONFIGS = {
         "default_manager_id": None,
         "refresh_minutes": DEFAULT_REFRESH_MINUTES,
     },
-    "DE": {
-        "geo_name": "Germany",
-        "default_language": "de",
-        "manager_name": "Germany manager",
+    "FR": {
+        "geo_name": "France",
+        "default_language": "fr",
+        "manager_name": "France manager",
+        "manager_telegram_url": "",
+        "default_manager_id": None,
+        "refresh_minutes": DEFAULT_REFRESH_MINUTES,
+    },
+    "IT": {
+        "geo_name": "Italy",
+        "default_language": "it",
+        "manager_name": "Italy manager",
+        "manager_telegram_url": "",
+        "default_manager_id": None,
+        "refresh_minutes": DEFAULT_REFRESH_MINUTES,
+    },
+    "LT": {
+        "geo_name": "Lithuania",
+        "default_language": "lt",
+        "manager_name": "Lithuania manager",
+        "manager_telegram_url": "",
+        "default_manager_id": None,
+        "refresh_minutes": DEFAULT_REFRESH_MINUTES,
+    },
+    "PL": {
+        "geo_name": "Poland",
+        "default_language": "pl",
+        "manager_name": "Poland manager",
         "manager_telegram_url": "",
         "default_manager_id": None,
         "refresh_minutes": DEFAULT_REFRESH_MINUTES,
@@ -459,9 +519,12 @@ def get_logo_extension(filename: str | None) -> str:
 
 def remove_channel_logo_file(logo_path: str | None) -> None:
     public_path = normalize_static_asset_path(logo_path)
-    if not public_path.startswith("/static/"):
+    if not public_path.startswith("/static/uploads/channel-logos/"):
         return
-    file_path = BASE_DIR / public_path.removeprefix("/")
+    filename = public_path.removeprefix("/static/uploads/channel-logos/")
+    if not filename or "/" in filename or "\\" in filename:
+        return
+    file_path = CHANNEL_LOGO_DIR / filename
     if file_path.is_file():
         file_path.unlink(missing_ok=True)
 
@@ -825,6 +888,20 @@ def seed_geo_data(conn: sqlite3.Connection) -> None:
         )
 
 
+def sync_geo_names_from_config(conn: sqlite3.Connection) -> None:
+    """Синхронизирует geo_name и default_language из DEFAULT_GEO_CONFIGS для существующих профилей."""
+    now_value = utc_now_iso()
+    for geo_code, config in DEFAULT_GEO_CONFIGS.items():
+        conn.execute(
+            """
+            UPDATE geo_profiles
+            SET geo_name = ?, default_language = ?, updated_at = ?
+            WHERE geo_code = ?
+            """,
+            (config["geo_name"], config["default_language"], now_value, geo_code),
+        )
+
+
 def backfill_geo_requisites_sequence_numbers(conn: sqlite3.Connection) -> None:
     rows = conn.execute(
         """
@@ -1182,6 +1259,7 @@ def init_db() -> None:
     )
     seed_bot_admins(conn)
     seed_geo_data(conn)
+    sync_geo_names_from_config(conn)
     backfill_geo_requisites_sequence_numbers(conn)
     migrate_legacy_geo_managers(conn)
     conn.commit()
@@ -4396,6 +4474,8 @@ async def admin_delete_requisites_history(geo_code: str, history_id: int, reques
 
 STATIC_DIR.mkdir(exist_ok=True)
 CHANNEL_LOGO_DIR.mkdir(parents=True, exist_ok=True)
+# Логотипы: если volume — монтируем отдельно; путь /static/uploads/channel-logos/ должен совпадать
+app.mount("/static/uploads/channel-logos", StaticFiles(directory=str(CHANNEL_LOGO_DIR)), name="channel_logos")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 

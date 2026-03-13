@@ -142,10 +142,11 @@
     <div class="mx-auto min-h-screen max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
         <header class="mb-6 flex items-center justify-between gap-4">
             <div class="flex min-w-0 flex-1 items-center gap-3">
-                <div x-show="hasChannelLogo()" x-cloak class="brand-logo flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full">
-                    <img :src="channelLogoFullUrl()" :alt="channelDisplayName()" class="h-full w-full object-cover">
+                <div x-show="hasChannelLogo() && !channelLogoFailed" x-cloak class="brand-logo flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full">
+                    <img :src="channelLogoFullUrl()" :alt="channelDisplayName()" class="h-full w-full object-cover"
+                         @error="channelLogoFailed = true">
                 </div>
-                <div x-show="!hasChannelLogo()" x-cloak class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[rgba(99,91,255,0.12)] text-[var(--accent)]">
+                <div x-show="!hasChannelLogo() || channelLogoFailed" x-cloak class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[rgba(99,91,255,0.12)] text-[var(--accent)]">
                     <span class="text-lg font-semibold" x-text="channelInitial()"></span>
                 </div>
                 <div class="surface min-w-0 flex-1 rounded-full px-5 py-3 shadow-soft sm:max-w-[18rem]">
@@ -366,15 +367,25 @@
             : "http://127.0.0.1:8000";
 
         const localeMap = {
+            en: "en-GB",
             es: "es-ES",
             de: "de-DE",
-            lt: "lt-LT"
+            fr: "fr-FR",
+            ro: "ro-RO",
+            it: "it-IT",
+            lt: "lt-LT",
+            pl: "pl-PL"
         };
 
         const languageCatalog = [
+            { code: "en", label: "English" },
             { code: "es", label: "Español" },
             { code: "de", label: "Deutsch" },
-            { code: "lt", label: "Lietuviu" }
+            { code: "fr", label: "Français" },
+            { code: "ro", label: "Română" },
+            { code: "it", label: "Italiano" },
+            { code: "lt", label: "Lietuvių" },
+            { code: "pl", label: "Polski" }
         ];
 
         const translations = {
@@ -615,6 +626,40 @@
                 paidAction: "Plătit",
                 managerButton: "Deschide Telegram",
                 managerUnavailable: "Linkul contactului Telegram nu este configurat încă."
+            },
+            pl: {
+                loading: "Ładowanie",
+                chooseLanguage: "Wybierz język",
+                defaultLanguage: "Domyślny:",
+                close: "Zamknij",
+                invalidTitle: "Ten link płatności jest niekompletny",
+                invalidText: "Poproś o prawidłowy link płatności z podaną kwotą.",
+                missingManagerTitle: "Ta strona płatności jest niedostępna",
+                missingManagerText: "Ten link nie może być jeszcze używany, ponieważ nie skonfigurowano kontaktu Telegram.",
+                missingRequisitesTitle: "Ta strona płatności jest niedostępna",
+                missingRequisitesText: "Obecnie nie skonfigurowano żadnych danych płatności.",
+                expiredTitle: "Czas minął",
+                expiredText: "Ten link płatności nie jest już aktywny. Poproś o nowy link.",
+                bankTransfer: "Przelew bankowy",
+                paymentPurpose: "Cel płatności",
+                paymentComment: "Ważne!",
+                timerLabel: "Dane zostaną zaktualizowane za",
+                timerLive: "Aktywny",
+                timerText: "Gdy timer się skończy, ten link stanie się nieaktywny. Poproś o nowy link.",
+                paymentDetails: "Dane do przelewu",
+                paymentDetailsTitle: "Wykonaj przelew używając poniższych danych",
+                paymentDetailsHint: "Skopiuj dane bankowe dokładnie tak, jak na tej stronie.",
+                bank: "Bank",
+                account: "IBAN",
+                receiver: "Odbiorca",
+                copyAction: "Kopiuj",
+                copied: "Skopiowano",
+                afterPayment: "Po płatności",
+                afterPaymentTitle: "Wyślij potwierdzenie po płatności",
+                afterPaymentHint: "Po wykonaniu przelewu wyślij potwierdzenie do kontaktu Telegram.",
+                paidAction: "Zapłacono",
+                managerButton: "Otwórz Telegram",
+                managerUnavailable: "Link do kontaktu Telegram nie jest jeszcze skonfigurowany."
             }
         };
 
@@ -623,6 +668,7 @@
                 loading: true,
                 showLanguages: false,
                 showAfterPayment: false,
+                channelLogoFailed: false,
                 currentLang: "es",
                 recommendedLanguage: "es",
                 mode: "invalid",
@@ -668,6 +714,7 @@
                     const context = await this.fetchContext();
                     this.mode = context.mode || "invalid";
                     this.invalidReason = String(context.invalid_reason || "");
+                    this.channelLogoFailed = false;
                     this.geo = context.geo || this.geo;
                     this.manager = context.manager || this.manager;
                     this.requisites = context.requisites || this.requisites;

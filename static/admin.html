@@ -485,7 +485,7 @@
                         </div>
                     </div>
 
-                    <form class="mt-4 space-y-4" @submit.prevent="saveChannel">
+                    <form id="channel-form" class="mt-4 space-y-4" @submit.prevent="saveChannel">
                         <div class="grid gap-4 sm:grid-cols-[1.2fr_0.8fr]">
                             <label class="block">
                                 <span class="mb-2 block text-sm text-zinc-400">Название канала</span>
@@ -549,7 +549,7 @@
                     </div>
                 </div>
 
-                <form class="mt-5 space-y-4" @submit.prevent="saveBotUser">
+                <form id="bot-user-form" class="mt-5 space-y-4" @submit.prevent="saveBotUser">
                     <div class="grid gap-4 sm:grid-cols-3">
                         <label class="block">
                             <span class="mb-2 block text-sm text-zinc-400">Telegram ID</span>
@@ -1498,6 +1498,9 @@
                     }
                     this.channelForm.logo_preview = "";
                     this.channelMessage = "";
+                    this.$nextTick(() => {
+                        document.getElementById("channel-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                    });
                 },
 
                 resetChannelForm() {
@@ -1579,6 +1582,9 @@
                     this.botUserForm.role = item?.role || "handler";
                     this.botUserForm.channel_id = item?.channel_id ? String(item.channel_id) : "";
                     this.botUserMessage = "";
+                    this.$nextTick(() => {
+                        document.getElementById("bot-user-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                    });
                 },
 
                 resetBotUserForm() {
