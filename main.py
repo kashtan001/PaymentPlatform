@@ -577,7 +577,7 @@ def build_payment_link(
     safe_geo = sanitize_geo_code(geo_code) or "ES"
     handler_contact = resolve_handler_contact(manager_id, manager_link_override)
     if resolve_requisites_for_geo(safe_geo, requisites_id) is None:
-        raise HTTPException(status_code=400, detail=f"Для GEO {safe_geo} не найдено ни одного реквизита")
+        raise HTTPException(status_code=400, detail="Не найдено ни одного реквизита")
     if handler_contact is None or not normalize_manager_link(handler_contact.get("manager_telegram_url")):
         raise HTTPException(status_code=400, detail="Не выбран обработчик с Telegram-ссылкой")
     params = {
@@ -1893,7 +1893,7 @@ def create_payment_link_record(
         raise HTTPException(status_code=400, detail="Выберите обработчика с Telegram username")
     requisites = get_active_requisites(safe_geo)
     if requisites is None:
-        raise HTTPException(status_code=400, detail=f"Для GEO {safe_geo} не найдено ни одного реквизита")
+        raise HTTPException(status_code=400, detail="Не найдено ни одного реквизита")
 
     profile = get_geo_profile(safe_geo)
     refresh_minutes = max(1, int(profile.get("refresh_minutes") or DEFAULT_REFRESH_MINUTES))
@@ -2801,7 +2801,6 @@ def build_geo_details_text(geo_code: str) -> str:
         else "Реквизиты: отсутствуют"
     )
     return (
-        f"GEO: {profile['geo_code']} ({profile['geo_name']})\n"
         f"Язык по умолчанию: {profile['default_language']}\n"
         f"Таймер: {profile['refresh_minutes']} мин\n"
         f"Обработчик выбирается при создании ссылки.\n\n"
@@ -2810,7 +2809,7 @@ def build_geo_details_text(geo_code: str) -> str:
 
 
 def build_geo_overview_text() -> str:
-    blocks = ["Активные реквизиты по GEO:"]
+    blocks = ["Активные реквизиты:"]
     for snapshot in list_geo_snapshots():
         profile = snapshot["profile"]
         requisites = snapshot["active_requisites"]
@@ -2820,7 +2819,7 @@ def build_geo_overview_text() -> str:
             else "Реквизиты отсутствуют"
         )
         blocks.append(
-            f"\n{profile['geo_code']} | {profile['geo_name']} | {profile['default_language']} | "
+            f"\n{profile['geo_name']} | {profile['default_language']} | "
             f"таймер {profile['refresh_minutes']} мин\n"
             f"{requisites_status}"
         )
@@ -2837,9 +2836,9 @@ def build_admins_text() -> str:
         lines.append(f"\nID: {item['user_id']} | {display_name} | {username} | роль: {role_label}")
     lines.append(
         "\nРоли:\n"
-        "Обработчик -> ссылки (сумма, валюта, GEO, комментарии, обработчик, язык)\n"
-        "Процессор -> добавить/удалить реквизит (GEO выбирается в потоке)\n"
-        "Админ -> полный доступ и добавление новых GEO\n\n"
+        "Обработчик -> ссылки (сумма, валюта, комментарии, обработчик, язык)\n"
+        "Процессор -> добавить/удалить реквизит (регион выбирается в потоке)\n"
+        "Админ -> полный доступ и добавление новых регионов\n\n"
         "Добавить админа: /addadmin 123456789\n"
         "Поставить роль: /setrole 123456789 handler|processor|admin\n"
         "Удалить: /removeadmin 123456789\n"
@@ -2858,17 +2857,16 @@ def build_help_text(role: str | None, geo_code: str) -> str:
     if is_processor:
         return (
             "Что можно делать:\n\n"
-            "➕ Добавить реквизит — выберите GEO, затем отправьте 4 строки:\n"
+            "➕ Добавить реквизит — выберите регион, затем отправьте 4 строки:\n"
             "Банк, IBAN, BIC/SWIFT (или -), Получатель\n\n"
-            "🗑 Удалить реквизит — выберите GEO, затем нажмите кнопку под записью."
+            "🗑 Удалить реквизит — выберите регион, затем нажмите кнопку под записью."
         )
     lines = [
         "Что можно делать сейчас:",
-        f"Текущий GEO: {geo_code}",
         "",
     ]
     if bot_role_has_permission(safe_role, "select_geo"):
-        lines.append("1. Сначала выберите GEO, если нужен другой.")
+        lines.append("1. Сначала выберите регион, если нужен другой.")
     lines.append("2. Используйте доступные вам кнопки снизу.")
     if bot_role_has_permission(safe_role, "create_link"):
         lines.append("3. Для ссылки на оплату нажмите `🔗 Ссылка на оплату` и следуйте шагам.")
@@ -2877,16 +2875,16 @@ def build_help_text(role: str | None, geo_code: str) -> str:
         lines.append("4. История реквизитов открывается кнопкой `🗂 История реквизитов`.")
     if bot_role_has_permission(safe_role, "manage_access"):
         lines.append("5. Права доступа смотрите в `👥 Права доступа`.")
-        lines.append("6. Новый GEO создается кнопкой `➕ Добавить GEO`.")
+        lines.append("6. Новый регион создается кнопкой `➕ Добавить GEO`.")
     return "\n".join(lines)
 
 
 def build_add_geo_text() -> str:
     options = ", ".join(f"{item['code']} ({item['label']})" for item in LANGUAGE_OPTIONS)
     return (
-        "Отправьте новый GEO четырьмя строками:\n"
-        "1. Код GEO\n"
-        "2. Название GEO\n"
+        "Отправьте новый регион четырьмя строками:\n"
+        "1. Код региона\n"
+        "2. Название региона\n"
         "3. Язык по умолчанию\n"
         "4. Таймер в минутах (или - для значения по умолчанию)\n\n"
         "Пример:\n"
@@ -2902,7 +2900,7 @@ def build_requisites_history_text(geo_code: str, action: str = "restore") -> str
     items = list_geo_requisites_history_for_geo(geo_code)
     if not items:
         return (
-            f"История реквизитов для {geo_code} пока пуста.\n\n"
+            "История реквизитов пока пуста.\n\n"
             "Сначала сохраните хотя бы один комплект реквизитов."
         )
 
@@ -2912,7 +2910,7 @@ def build_requisites_history_text(geo_code: str, action: str = "restore") -> str
         else "Нажмите кнопку под нужной записью, чтобы удалить запись из истории."
     )
     lines = [
-        f"История реквизитов для {geo_code}:",
+        "История реквизитов:",
         action_hint,
         "",
     ]
@@ -3060,15 +3058,14 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(
             "Внутренняя панель команды активна.\n\n"
             f"Ваша роль: {get_bot_role_label(role)}\n\n"
-            "Добавить реквизит — выберите GEO и введите данные.\n"
-            "Удалить реквизит — выберите GEO и выберите запись для удаления.",
+            "Добавить реквизит — выберите регион и введите данные.\n"
+            "Удалить реквизит — выберите регион и выберите запись для удаления.",
             reply_markup=main_keyboard(role),
         )
     else:
         await update.effective_message.reply_text(
             "Внутренняя панель команды активна.\n\n"
-            f"Ваша роль: {get_bot_role_label(role)}\n"
-            f"Текущий выбранный GEO: {selected_geo}\n\n"
+            f"Ваша роль: {get_bot_role_label(role)}\n\n"
             f"{build_geo_details_text(selected_geo)}\n\n{build_help_text(role, selected_geo)}",
             reply_markup=main_keyboard(role),
         )
@@ -3235,7 +3232,7 @@ async def select_geo_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
     await update.effective_message.reply_text(
-        f"Текущий GEO: {selected_geo}\nВыберите новый GEO.",
+        "Выберите регион.",
         reply_markup=geo_picker_keyboard(),
     )
     return WAITING_GEO_SELECTION
@@ -3245,14 +3242,14 @@ async def select_geo_save(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     geo_code = sanitize_geo_code(update.effective_message.text)
     if not geo_code:
         available = ", ".join(profile["geo_code"] for profile in list_geo_profiles())
-        await update.effective_message.reply_text(f"Выберите GEO из списка: {available}")
+        await update.effective_message.reply_text(f"Выберите регион из списка: {available}")
         return WAITING_GEO_SELECTION
 
     context.user_data["selected_geo"] = geo_code
     set_bot_admin_selected_geo(update.effective_user.id if update.effective_user else None, geo_code)
     log_bot_activity(update.effective_user.id if update.effective_user else None, "select_geo", geo_code=geo_code)
     await update.effective_message.reply_text(
-        f"GEO переключен на {geo_code}.\n\n{build_geo_details_text(geo_code)}",
+        build_geo_details_text(geo_code),
         reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
     )
     return ConversationHandler.END
@@ -3263,7 +3260,7 @@ async def add_requisite_start(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
     available = [p["geo_code"] for p in list_geo_profiles()]
     await update.effective_message.reply_text(
-        "Выберите GEO для добавления реквизита.\n"
+        "Выберите регион для добавления реквизита.\n"
         f"Доступно: {', '.join(available) if available else 'нет'}",
         reply_markup=geo_picker_keyboard(),
     )
@@ -3281,7 +3278,7 @@ async def add_geo_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     incoming_text = update.effective_message.text
     if is_menu_button_text(incoming_text):
         await update.effective_message.reply_text(
-            "Создание GEO отменено. Нажмите нужную кнопку еще раз.",
+            "Создание региона отменено. Нажмите нужную кнопку еще раз.",
             reply_markup=main_keyboard(get_bot_user_role(update.effective_user.id if update.effective_user else None)),
         )
         return ConversationHandler.END
@@ -3295,17 +3292,17 @@ async def add_geo_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     geo_code = normalize_geo_code(lines[0])
     if not geo_code:
-        await update.effective_message.reply_text("Код GEO должен содержать 2-12 символов: A-Z, 0-9, _ или -.")
+        await update.effective_message.reply_text("Код региона должен содержать 2-12 символов: A-Z, 0-9, _ или -.")
         return WAITING_NEW_GEO_DETAILS
     if geo_code in set(list_known_geo_codes()):
         await update.effective_message.reply_text(
-            f"GEO {geo_code} уже существует. Используйте админку, если хотите поменять его настройки."
+            "Регион уже существует. Используйте админку, если хотите поменять настройки."
         )
         return WAITING_NEW_GEO_DETAILS
 
     geo_name = lines[1].strip()
     if not geo_name:
-        await update.effective_message.reply_text("Название GEO не может быть пустым.")
+        await update.effective_message.reply_text("Название региона не может быть пустым.")
         return WAITING_NEW_GEO_DETAILS
 
     default_language = sanitize_language_code(lines[2])
@@ -3334,7 +3331,7 @@ async def add_geo_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     set_bot_admin_selected_geo(user_id, geo_code)
     log_bot_activity(user_id, "create_geo", geo_code=geo_code, payload=geo_name)
     await update.effective_message.reply_text(
-        f"GEO {geo_code} создан.\n\n{build_geo_details_text(geo_code)}",
+        f"Регион создан.\n\n{build_geo_details_text(geo_code)}",
         reply_markup=main_keyboard(get_bot_user_role(user_id)),
     )
     return ConversationHandler.END
@@ -3344,19 +3341,18 @@ async def add_req_geo_received(update: Update, context: ContextTypes.DEFAULT_TYP
     geo_code = sanitize_geo_code(update.effective_message.text)
     if not geo_code:
         available = ", ".join(p["geo_code"] for p in list_geo_profiles())
-        await update.effective_message.reply_text(f"Выберите GEO из списка: {available}")
+        await update.effective_message.reply_text(f"Выберите регион из списка: {available}")
         return WAITING_ADD_REQ_GEO
     context.user_data["selected_geo"] = geo_code
     requisites = get_active_requisites(geo_code)
     if not requisites:
         await update.effective_message.reply_text(
-            f"Для GEO {geo_code} реквизитов пока нет.\n\n"
+            "Реквизитов пока нет.\n\n"
             "Отправьте 4 строки в формате:\n"
             "Банк\nIBAN\nBIC/SWIFT или -\nПолучатель"
         )
         return WAITING_REQUISITES
     await update.effective_message.reply_text(
-        f"Текущий GEO: {geo_code}\n"
         f"Банк: {requisites['bank_name']}\n"
         f"IBAN: {requisites['card_number']}\n"
         f"BIC / SWIFT: {requisites['bic_swift'] or 'не указан'}\n"
@@ -3378,13 +3374,12 @@ async def change_reqs_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     requisites = get_active_requisites(selected_geo)
     if not requisites:
         await update.effective_message.reply_text(
-            f"Для GEO {selected_geo} реквизитов пока нет.\n\n"
+            "Реквизитов пока нет.\n\n"
             "Отправьте 4 строки в формате:\n"
             "Банк\nIBAN\nBIC/SWIFT или -\nПолучатель"
         )
         return WAITING_REQUISITES
     await update.effective_message.reply_text(
-        f"Текущий GEO: {selected_geo}\n"
         f"Банк: {requisites['bank_name']}\n"
         f"IBAN: {requisites['card_number']}\n"
         f"BIC / SWIFT: {requisites['bic_swift'] or 'не указан'}\n"
@@ -3464,7 +3459,7 @@ async def delete_req_geo_received(update: Update, context: ContextTypes.DEFAULT_
     geo_code = sanitize_geo_code(update.effective_message.text)
     if not geo_code:
         available = ", ".join(p["geo_code"] for p in list_geo_profiles())
-        await update.effective_message.reply_text(f"Выберите GEO из списка: {available}")
+        await update.effective_message.reply_text(f"Выберите регион из списка: {available}")
         return WAITING_DELETE_REQ_GEO
     user_id = update.effective_user.id if update.effective_user else None
     await update.effective_message.reply_text(
