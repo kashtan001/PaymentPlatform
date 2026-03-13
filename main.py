@@ -142,7 +142,9 @@ MAX_LOGIN_ATTEMPTS = 5
 LANGUAGE_OPTIONS = [
     {"code": "es", "label": "Español"},
     {"code": "de", "label": "Deutsch"},
-    {"code": "lt", "label": "Lietuviu"},
+    {"code": "fr", "label": "Français"},
+    {"code": "ro", "label": "Română"},
+    {"code": "it", "label": "Italiano"},
 ]
 FALLBACK_LANGUAGE_CODE = LANGUAGE_OPTIONS[0]["code"]
 LANDING_COMMENT_OPTIONS = [
@@ -157,9 +159,19 @@ LANDING_COMMENT_OPTIONS = [
         "comment": "Solo se acepta PAGO INSTANTÁNEO",
     },
     {
-        "code": "lt",
-        "button": "Литовский",
-        "comment": "Priimami tik momentiniai mokejimai",
+        "code": "fr",
+        "button": "Французский",
+        "comment": "Seuls les PAIEMENTS INSTANTANÉS sont acceptés",
+    },
+    {
+        "code": "ro",
+        "button": "Румынский",
+        "comment": "Se acceptă doar PLATĂ INSTANTANEE.",
+    },
+    {
+        "code": "it",
+        "button": "Итальянский",
+        "comment": "È accettato solo PAGAMENTO ISTANTANEO",
     },
 ]
 LANDING_COMMENT_BY_BUTTON = {
@@ -2966,9 +2978,7 @@ def build_link_language_selection_text() -> str:
 
 
 def build_landing_comment_selection_text() -> str:
-    lines = ["На каком языке комментарий для лендинга?", ""]
-    lines.extend(item["button"] for item in LANDING_COMMENT_OPTIONS)
-    return "\n".join(lines)
+    return "Выберите кнопку с комментарием для лендинга"
 
 
 def landing_comment_picker_keyboard() -> ReplyKeyboardMarkup:
@@ -3745,7 +3755,6 @@ async def send_ready_payment_link(
         f"Сумма: {amount:.2f} {sanitize_currency_code(currency_code) or DEFAULT_CURRENCY}\n"
         f"Реквизиты: зафиксирован текущий активный комплект GEO\n"
         f"Обработчик: {handler.get('manager_name') or 'не выбран'}\n"
-        f"Комментарий для платежа: {clean_label or 'не указан'}\n"
         f"Комментарий для лендинга: {clean_comment or 'не указан'}\n"
         f"Язык лендинга: {language_label}\n"
         f"Ссылка: {link}",
@@ -3817,6 +3826,7 @@ async def create_link_requisites(update: Update, context: ContextTypes.DEFAULT_T
         return WAITING_LINK_REQUISITES
 
     context.user_data["temp_geo"] = geo_code
+    context.user_data["temp_label"] = ""
     active_requisites = get_active_requisites(geo_code)
     if not active_requisites:
         await update.effective_message.reply_text(
@@ -3825,9 +3835,10 @@ async def create_link_requisites(update: Update, context: ContextTypes.DEFAULT_T
         return WAITING_LINK_REQUISITES
     context.user_data["temp_requisites_id"] = None
     await update.effective_message.reply_text(
-        "Введите комментарий для платежа или отправьте - если он не нужен."
+        build_landing_comment_selection_text(),
+        reply_markup=landing_comment_picker_keyboard(),
     )
-    return WAITING_LINK_LABEL
+    return WAITING_LINK_COMMENT
 
 
 async def create_link_manager(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -3867,55 +3878,11 @@ async def create_link_manager(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
-async def create_link_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    raw_value = update.effective_message.text.strip().lower()
-    safe_language = sanitize_language_code(raw_value)
-    if not safe_language:
-        available = ", ".join(item["code"] for item in LANGUAGE_OPTIONS)
-        await update.effective_message.reply_text(f"Нужен один из кодов: {available}")
-        return WAITING_LINK_LANGUAGE
-
-    context.user_data["temp_language"] = safe_language
-    amount = float(context.user_data.get("temp_amount", 0))
-    user_id = update.effective_user.id if update.effective_user else None
-    selected_geo = str(context.user_data.get("temp_geo") or get_selected_geo(context, user_id))
-    requisites_id = context.user_data.get("temp_requisites_id")
-    manager_id = context.user_data.get("temp_manager_id")
-    manager_link = normalize_manager_link(context.user_data.get("temp_manager_link"))
-    clean_label = str(context.user_data.get("temp_label", ""))
-    clean_comment = str(context.user_data.get("temp_comment", ""))
-    currency_code = context.user_data.get("temp_currency")
-    return await send_ready_payment_link(
-        update,
-        context,
-        amount=amount,
-        user_id=user_id,
-        selected_geo=selected_geo,
-        currency_code=currency_code,
-        requisites_id=requisites_id,
-        manager_id=manager_id,
-        manager_link=manager_link,
-        forced_language=safe_language,
-        clean_label=clean_label,
-        clean_comment=clean_comment,
-    )
-
-
-async def create_link_label(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    label = update.effective_message.text.strip()
-    context.user_data["temp_label"] = "" if label == "-" else sanitize_payment_label(label)
-    await update.effective_message.reply_text(
-        build_landing_comment_selection_text(),
-        reply_markup=landing_comment_picker_keyboard(),
-    )
-    return WAITING_LINK_COMMENT
-
-
 async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     selected_option = LANDING_COMMENT_BY_BUTTON.get(update.effective_message.text.strip().casefold())
     if selected_option is None:
         await update.effective_message.reply_text(
-            "Нужно выбрать язык кнопкой ниже.",
+            "Нужно выбрать кнопку с комментарием ниже.",
             reply_markup=landing_comment_picker_keyboard(),
         )
         return WAITING_LINK_COMMENT
@@ -3997,7 +3964,6 @@ if bot_app is not None:
             WAITING_LINK_AMOUNT: [MessageHandler(conversation_text_filter, create_link_amount)],
             WAITING_LINK_CURRENCY: [MessageHandler(conversation_text_filter, create_link_currency)],
             WAITING_LINK_REQUISITES: [MessageHandler(conversation_text_filter, create_link_requisites)],
-            WAITING_LINK_LABEL: [MessageHandler(conversation_text_filter, create_link_label)],
             WAITING_LINK_COMMENT: [MessageHandler(conversation_text_filter, create_link_comment)],
             WAITING_LINK_MANAGER: [MessageHandler(conversation_text_filter, create_link_manager)],
         },
