@@ -136,6 +136,12 @@
             line-height: 1.35;
             letter-spacing: 0.03em;
         }
+
+        .detail-value-iban {
+            font-size: clamp(0.82rem, 0.74rem + 0.48vw, 1.12rem) !important;
+            line-height: 1.25;
+            letter-spacing: 0.01em;
+        }
     </style>
 </head>
 <body x-data="landingApp()" x-init="init()">
@@ -262,7 +268,7 @@
                         <div class="detail-row flex items-start justify-between gap-4 px-5 py-5 sm:px-6">
                             <div class="min-w-0">
                                 <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.account"></p>
-                                <p class="detail-value-mono mt-2 font-mono font-semibold text-slate-950" x-text="requisites.card_number"></p>
+                                <p class="detail-value-mono detail-value-iban mt-2 font-mono font-semibold text-slate-950" x-text="requisites.card_number"></p>
                             </div>
                             <button type="button" @click="copyField('card', requisites.card_number)"
                                     class="-mr-1 -mt-1 shrink-0 self-start rounded-full px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] transition sm:-mr-2 sm:-mt-2"

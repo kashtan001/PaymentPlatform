@@ -1,8 +1,11 @@
 import ipaddress
+import logging
 import os
 import re
 import secrets
 import sqlite3
+import sys
+import time
 from uuid import uuid4
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -28,6 +31,17 @@ from telegram.ext import (
 )
 
 # --- PATHS & CONFIG ---
+LOG_LEVEL_NAME = (os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO")
+LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.INFO)
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    stream=sys.stdout,
+    force=True,
+)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logger = logging.getLogger("paymentplatform")
+
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 # Volume mount path (e.g. /data) — логотипы сохраняются в {UPLOADS_VOLUME_PATH}/channel-logos
@@ -367,6 +381,21 @@ class ChannelPayload(BaseModel):
     channel_id: int | None = None
     channel_name: str
     logo_path: str | None = None
+
+
+def build_runtime_snapshot() -> dict[str, Any]:
+    return {
+        "log_level": LOG_LEVEL_NAME,
+        "bot_enabled": BOT_ENABLED,
+        "bot_token_configured": bool(BOT_TOKEN),
+        "initial_admin_ids_count": len(INITIAL_ADMIN_IDS),
+        "db_path": str(DB_FILE),
+        "db_exists": DB_FILE.exists(),
+        "web_url": WEB_URL,
+        "uploads_path": str(CHANNEL_LOGO_DIR),
+        "uploads_path_exists": CHANNEL_LOGO_DIR.exists(),
+        "admin_auth_configured": ADMIN_AUTH_CONFIGURED,
+    }
 
 
 def utc_now() -> datetime:
@@ -2772,7 +2801,12 @@ async def build_visitor_context(request: Request) -> tuple[dict[str, Any], str |
     return visitor, browser_language
 
 
-init_db()
+try:
+    init_db()
+    logger.info("Database initialized successfully: %s", str(DB_FILE))
+except Exception:
+    logger.exception("Database initialization failed: %s", str(DB_FILE))
+    raise
 
 # --- TELEGRAM BOT ---
 bot_app = Application.builder().token(BOT_TOKEN).build() if BOT_ENABLED else None
@@ -2805,6 +2839,30 @@ def get_bot_status() -> dict[str, Any]:
         "web_url": WEB_URL,
         "error": BOT_RUNTIME_ERROR,
     }
+
+
+def summarize_update(update: object) -> dict[str, Any]:
+    if not isinstance(update, Update):
+        return {"raw_update_type": type(update).__name__}
+
+    message = update.effective_message
+    callback_query = update.callback_query
+    return {
+        "update_id": update.update_id,
+        "user_id": update.effective_user.id if update.effective_user else None,
+        "chat_id": update.effective_chat.id if update.effective_chat else None,
+        "message_text": (message.text or "")[:200] if message and message.text else "",
+        "callback_data": (callback_query.data or "")[:200] if callback_query and callback_query.data else "",
+    }
+
+
+async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    error = getattr(context, "error", None)
+    update_summary = summarize_update(update)
+    if error is None:
+        logger.error("Telegram handler error without exception details: %s", update_summary)
+        return
+    logger.error("Telegram handler error: %s", update_summary, exc_info=error)
 
 
 def get_selected_geo(context: ContextTypes.DEFAULT_TYPE, user_id: int | None = None) -> str:
@@ -4087,6 +4145,7 @@ if bot_app is not None:
     bot_app.add_handler(conv_handler_add_geo)
     bot_app.add_handler(conv_handler_delete_req)
     bot_app.add_handler(conv_handler_link)
+    bot_app.add_error_handler(telegram_error_handler)
 
 
 # --- FASTAPI ---
@@ -4094,28 +4153,38 @@ if bot_app is not None:
 async def lifespan(app: FastAPI):
     global BOT_RUNTIME_ERROR, BOT_RUNTIME_STARTED
 
+    logger.info("Application startup initiated")
+    logger.info("Runtime snapshot: %s", build_runtime_snapshot())
+
     if bot_app is not None:
         try:
+            logger.info("Initializing Telegram bot runtime")
             await bot_app.initialize()
             await bot_app.start()
             if bot_app.updater is not None:
                 await bot_app.updater.start_polling()
             BOT_RUNTIME_STARTED = True
             BOT_RUNTIME_ERROR = None
+            logger.info("Telegram bot polling started successfully")
         except Exception as exc:
             BOT_RUNTIME_STARTED = False
-            BOT_RUNTIME_ERROR = str(exc)
+            BOT_RUNTIME_ERROR = f"{type(exc).__name__}: {exc}"
+            logger.exception("Telegram bot startup failed")
+    else:
+        logger.warning("Telegram bot is disabled because BOT_TOKEN is not configured")
 
     yield
 
+    logger.info("Application shutdown initiated")
     if bot_app is not None and BOT_RUNTIME_STARTED:
         try:
             if bot_app.updater is not None:
                 await bot_app.updater.stop()
             await bot_app.stop()
             await bot_app.shutdown()
+            logger.info("Telegram bot stopped successfully")
         except Exception:
-            pass
+            logger.exception("Telegram bot shutdown failed")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -4131,6 +4200,24 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.perf_counter()
+    path = request.url.path
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        logger.exception("HTTP %s %s failed in %.2f ms", request.method, path, elapsed_ms)
+        raise
+
+    elapsed_ms = (time.perf_counter() - start_time) * 1000
+    if path != "/api/health" and not path.startswith("/static/"):
+        log_method = logger.warning if response.status_code >= 400 else logger.info
+        log_method("HTTP %s %s -> %s in %.2f ms", request.method, path, response.status_code, elapsed_ms)
+    return response
 
 
 @app.get("/")
@@ -4499,4 +4586,5 @@ if __name__ == "__main__":
     import uvicorn
 
     port = parse_optional_int(os.getenv("PORT", ""), 8000) or 8000
+    logger.info("Starting uvicorn on 0.0.0.0:%s", port)
     uvicorn.run(app, host="0.0.0.0", port=port)
