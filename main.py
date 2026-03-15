@@ -104,7 +104,7 @@ def parse_admin_ids(*raw_values: str) -> set[int]:
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 INITIAL_ADMIN_IDS = parse_admin_ids(os.getenv("ADMIN_ID", ""), os.getenv("ADMIN_IDS", ""))
 WEB_URL = os.getenv("WEB_URL", "http://localhost:8000").rstrip("/")
-DEFAULT_TELEGRAM_PROXY_URL = "http://user351165:35rmsy@185.218.1.162:1479"
+DEFAULT_TELEGRAM_PROXY_URL = "socks5://user351165:35rmsy@185.218.1.162:11479"
 TELEGRAM_PROXY_URL = os.getenv("TELEGRAM_PROXY_URL", "").strip() or DEFAULT_TELEGRAM_PROXY_URL
 TELEGRAM_CONNECT_TIMEOUT = max(5.0, parse_optional_float(os.getenv("TELEGRAM_CONNECT_TIMEOUT", ""), 20.0) or 20.0)
 TELEGRAM_READ_TIMEOUT = max(5.0, parse_optional_float(os.getenv("TELEGRAM_READ_TIMEOUT", ""), 20.0) or 20.0)
