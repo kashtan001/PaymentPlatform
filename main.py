@@ -1,3 +1,4 @@
+import asyncio
 import ipaddress
 import logging
 import os
@@ -80,6 +81,16 @@ def parse_optional_int(raw_value: str, default: int | None = None) -> int | None
         return default
 
 
+def parse_optional_float(raw_value: str, default: float | None = None) -> float | None:
+    value = (raw_value or "").strip()
+    if not value:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 def parse_admin_ids(*raw_values: str) -> set[int]:
     result: set[int] = set()
     for raw_value in raw_values:
@@ -93,6 +104,27 @@ def parse_admin_ids(*raw_values: str) -> set[int]:
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 INITIAL_ADMIN_IDS = parse_admin_ids(os.getenv("ADMIN_ID", ""), os.getenv("ADMIN_IDS", ""))
 WEB_URL = os.getenv("WEB_URL", "http://localhost:8000").rstrip("/")
+TELEGRAM_PROXY_URL = os.getenv("TELEGRAM_PROXY_URL", "").strip()
+TELEGRAM_CONNECT_TIMEOUT = max(5.0, parse_optional_float(os.getenv("TELEGRAM_CONNECT_TIMEOUT", ""), 20.0) or 20.0)
+TELEGRAM_READ_TIMEOUT = max(5.0, parse_optional_float(os.getenv("TELEGRAM_READ_TIMEOUT", ""), 20.0) or 20.0)
+TELEGRAM_WRITE_TIMEOUT = max(5.0, parse_optional_float(os.getenv("TELEGRAM_WRITE_TIMEOUT", ""), 20.0) or 20.0)
+TELEGRAM_POOL_TIMEOUT = max(1.0, parse_optional_float(os.getenv("TELEGRAM_POOL_TIMEOUT", ""), 10.0) or 10.0)
+TELEGRAM_GET_UPDATES_CONNECT_TIMEOUT = max(
+    5.0,
+    parse_optional_float(os.getenv("TELEGRAM_GET_UPDATES_CONNECT_TIMEOUT", ""), TELEGRAM_CONNECT_TIMEOUT) or TELEGRAM_CONNECT_TIMEOUT,
+)
+TELEGRAM_GET_UPDATES_READ_TIMEOUT = max(
+    5.0,
+    parse_optional_float(os.getenv("TELEGRAM_GET_UPDATES_READ_TIMEOUT", ""), 70.0) or 70.0,
+)
+TELEGRAM_GET_UPDATES_WRITE_TIMEOUT = max(
+    5.0,
+    parse_optional_float(os.getenv("TELEGRAM_GET_UPDATES_WRITE_TIMEOUT", ""), TELEGRAM_WRITE_TIMEOUT) or TELEGRAM_WRITE_TIMEOUT,
+)
+TELEGRAM_GET_UPDATES_POOL_TIMEOUT = max(
+    1.0,
+    parse_optional_float(os.getenv("TELEGRAM_GET_UPDATES_POOL_TIMEOUT", ""), TELEGRAM_POOL_TIMEOUT) or TELEGRAM_POOL_TIMEOUT,
+)
 DEFAULT_CURRENCY = "EUR"
 DEFAULT_REFRESH_MINUTES = max(1, parse_optional_int(os.getenv("DEFAULT_REFRESH_MINUTES", ""), 15) or 15)
 DEFAULT_PREVIEW_AMOUNT = 250.0
@@ -155,6 +187,13 @@ ADMIN_SESSIONS: dict[str, datetime] = {}
 GEO_CACHE: dict[str, dict[str, Any]] = {}
 BOT_RUNTIME_STARTED = False
 BOT_RUNTIME_ERROR: str | None = None
+BOT_RUNTIME_LAST_ATTEMPT_AT: str | None = None
+BOT_RUNTIME_LAST_SUCCESS_AT: str | None = None
+BOT_RUNTIME_ATTEMPTS = 0
+BOT_RUNTIME_TASK: asyncio.Task | None = None
+BOT_RUNTIME_SHUTDOWN = False
+BOT_STARTUP_RETRY_SECONDS = max(5, parse_optional_int(os.getenv("BOT_STARTUP_RETRY_SECONDS", ""), 30) or 30)
+BOT_HEALTHCHECK_SECONDS = max(5, parse_optional_int(os.getenv("BOT_HEALTHCHECK_SECONDS", ""), 15) or 15)
 LOGIN_ATTEMPTS: dict[str, list[datetime]] = {}
 LOGIN_WINDOW_MINUTES = 10
 MAX_LOGIN_ATTEMPTS = 5
@@ -392,9 +431,18 @@ def build_runtime_snapshot() -> dict[str, Any]:
         "db_path": str(DB_FILE),
         "db_exists": DB_FILE.exists(),
         "web_url": WEB_URL,
+        "telegram_proxy_configured": bool(TELEGRAM_PROXY_URL),
+        "telegram_connect_timeout": TELEGRAM_CONNECT_TIMEOUT,
+        "telegram_read_timeout": TELEGRAM_READ_TIMEOUT,
+        "telegram_write_timeout": TELEGRAM_WRITE_TIMEOUT,
+        "telegram_pool_timeout": TELEGRAM_POOL_TIMEOUT,
+        "telegram_get_updates_connect_timeout": TELEGRAM_GET_UPDATES_CONNECT_TIMEOUT,
+        "telegram_get_updates_read_timeout": TELEGRAM_GET_UPDATES_READ_TIMEOUT,
         "uploads_path": str(CHANNEL_LOGO_DIR),
         "uploads_path_exists": CHANNEL_LOGO_DIR.exists(),
         "admin_auth_configured": ADMIN_AUTH_CONFIGURED,
+        "bot_startup_retry_seconds": BOT_STARTUP_RETRY_SECONDS,
+        "bot_healthcheck_seconds": BOT_HEALTHCHECK_SECONDS,
     }
 
 
@@ -2809,7 +2857,41 @@ except Exception:
     raise
 
 # --- TELEGRAM BOT ---
-bot_app = Application.builder().token(BOT_TOKEN).build() if BOT_ENABLED else None
+
+def build_bot_application() -> Application | None:
+    if not BOT_ENABLED:
+        return None
+
+    builder = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .connect_timeout(TELEGRAM_CONNECT_TIMEOUT)
+        .read_timeout(TELEGRAM_READ_TIMEOUT)
+        .write_timeout(TELEGRAM_WRITE_TIMEOUT)
+        .pool_timeout(TELEGRAM_POOL_TIMEOUT)
+        .get_updates_connect_timeout(TELEGRAM_GET_UPDATES_CONNECT_TIMEOUT)
+        .get_updates_read_timeout(TELEGRAM_GET_UPDATES_READ_TIMEOUT)
+        .get_updates_write_timeout(TELEGRAM_GET_UPDATES_WRITE_TIMEOUT)
+        .get_updates_pool_timeout(TELEGRAM_GET_UPDATES_POOL_TIMEOUT)
+    )
+
+    if TELEGRAM_PROXY_URL:
+        builder = builder.proxy(TELEGRAM_PROXY_URL).get_updates_proxy(TELEGRAM_PROXY_URL)
+        logger.warning("Telegram proxy is enabled")
+
+    return builder.build()
+
+
+bot_app = build_bot_application()
+
+
+def is_bot_runtime_healthy() -> bool:
+    if bot_app is None:
+        return False
+    runtime_running = bool(getattr(bot_app, "running", False))
+    updater = getattr(bot_app, "updater", None)
+    updater_running = updater is None or bool(getattr(updater, "running", False))
+    return BOT_RUNTIME_STARTED and runtime_running and updater_running
 
 
 def get_bot_status() -> dict[str, Any]:
@@ -2835,7 +2917,11 @@ def get_bot_status() -> dict[str, Any]:
         "runtime_started": BOT_RUNTIME_STARTED,
         "app_running": runtime_running,
         "updater_running": updater_running,
-        "control_panel_ready": BOT_ENABLED and admins_total > 0 and BOT_RUNTIME_STARTED,
+        "runtime_healthy": is_bot_runtime_healthy(),
+        "startup_attempts": BOT_RUNTIME_ATTEMPTS,
+        "last_attempt_at": BOT_RUNTIME_LAST_ATTEMPT_AT,
+        "last_success_at": BOT_RUNTIME_LAST_SUCCESS_AT,
+        "control_panel_ready": BOT_ENABLED and admins_total > 0 and is_bot_runtime_healthy(),
         "web_url": WEB_URL,
         "error": BOT_RUNTIME_ERROR,
     }
@@ -2863,6 +2949,94 @@ async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_T
         logger.error("Telegram handler error without exception details: %s", update_summary)
         return
     logger.error("Telegram handler error: %s", update_summary, exc_info=error)
+
+
+async def stop_bot_runtime() -> None:
+    global BOT_RUNTIME_STARTED
+
+    if bot_app is None:
+        return
+
+    updater = getattr(bot_app, "updater", None)
+    if updater is not None and getattr(updater, "running", False):
+        try:
+            await updater.stop()
+        except Exception:
+            logger.exception("Telegram updater shutdown failed")
+
+    if getattr(bot_app, "running", False):
+        try:
+            await bot_app.stop()
+        except Exception:
+            logger.exception("Telegram application stop failed")
+
+    try:
+        await bot_app.shutdown()
+    except Exception:
+        logger.debug("Telegram application shutdown skipped or failed", exc_info=True)
+
+    BOT_RUNTIME_STARTED = False
+
+
+async def start_bot_runtime() -> bool:
+    global BOT_RUNTIME_ATTEMPTS, BOT_RUNTIME_ERROR, BOT_RUNTIME_LAST_ATTEMPT_AT, BOT_RUNTIME_LAST_SUCCESS_AT, BOT_RUNTIME_STARTED
+
+    if bot_app is None:
+        return False
+    if BOT_RUNTIME_STARTED:
+        return True
+
+    BOT_RUNTIME_ATTEMPTS += 1
+    BOT_RUNTIME_LAST_ATTEMPT_AT = utc_now_iso()
+    logger.info("Initializing Telegram bot runtime (attempt %s)", BOT_RUNTIME_ATTEMPTS)
+
+    try:
+        await bot_app.initialize()
+        me = bot_app.bot.bot
+        await bot_app.start()
+        if bot_app.updater is not None:
+            await bot_app.updater.start_polling()
+        BOT_RUNTIME_STARTED = True
+        BOT_RUNTIME_ERROR = None
+        BOT_RUNTIME_LAST_SUCCESS_AT = utc_now_iso()
+        logger.info("Telegram bot is ready: @%s (id=%s)", me.username or "unknown", me.id)
+        logger.info("Telegram bot polling started successfully")
+        return True
+    except Exception as exc:
+        BOT_RUNTIME_STARTED = False
+        BOT_RUNTIME_ERROR = f"{type(exc).__name__}: {exc}"
+        logger.exception("Telegram bot startup failed on attempt %s", BOT_RUNTIME_ATTEMPTS)
+        await stop_bot_runtime()
+        return False
+
+
+async def supervise_bot_runtime() -> None:
+    global BOT_RUNTIME_ERROR
+
+    logger.info(
+        "Telegram bot supervisor started with retry interval %s seconds and healthcheck interval %s seconds",
+        BOT_STARTUP_RETRY_SECONDS,
+        BOT_HEALTHCHECK_SECONDS,
+    )
+    try:
+        while not BOT_RUNTIME_SHUTDOWN:
+            if not BOT_RUNTIME_STARTED:
+                started = await start_bot_runtime()
+                if not started and not BOT_RUNTIME_SHUTDOWN:
+                    logger.warning("Telegram bot is offline; next retry in %s seconds", BOT_STARTUP_RETRY_SECONDS)
+                    await asyncio.sleep(BOT_STARTUP_RETRY_SECONDS)
+                    continue
+            if BOT_RUNTIME_STARTED and not is_bot_runtime_healthy():
+                BOT_RUNTIME_ERROR = "Runtime became unhealthy and restart was requested"
+                logger.warning("Telegram bot runtime became unhealthy; restarting bot")
+                await stop_bot_runtime()
+                if not BOT_RUNTIME_SHUTDOWN:
+                    await asyncio.sleep(BOT_STARTUP_RETRY_SECONDS)
+                    continue
+            await asyncio.sleep(BOT_HEALTHCHECK_SECONDS)
+    except asyncio.CancelledError:
+        logger.info("Telegram bot supervisor cancelled")
+        raise
 
 
 def get_selected_geo(context: ContextTypes.DEFAULT_TYPE, user_id: int | None = None) -> str:
@@ -4151,40 +4325,33 @@ if bot_app is not None:
 # --- FASTAPI ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global BOT_RUNTIME_ERROR, BOT_RUNTIME_STARTED
+    global BOT_RUNTIME_SHUTDOWN, BOT_RUNTIME_TASK
 
     logger.info("Application startup initiated")
     logger.info("Runtime snapshot: %s", build_runtime_snapshot())
 
     if bot_app is not None:
-        try:
-            logger.info("Initializing Telegram bot runtime")
-            await bot_app.initialize()
-            await bot_app.start()
-            if bot_app.updater is not None:
-                await bot_app.updater.start_polling()
-            BOT_RUNTIME_STARTED = True
-            BOT_RUNTIME_ERROR = None
-            logger.info("Telegram bot polling started successfully")
-        except Exception as exc:
-            BOT_RUNTIME_STARTED = False
-            BOT_RUNTIME_ERROR = f"{type(exc).__name__}: {exc}"
-            logger.exception("Telegram bot startup failed")
+        BOT_RUNTIME_SHUTDOWN = False
+        BOT_RUNTIME_TASK = asyncio.create_task(supervise_bot_runtime())
     else:
         logger.warning("Telegram bot is disabled because BOT_TOKEN is not configured")
 
     yield
 
     logger.info("Application shutdown initiated")
-    if bot_app is not None and BOT_RUNTIME_STARTED:
+    BOT_RUNTIME_SHUTDOWN = True
+    if BOT_RUNTIME_TASK is not None:
         try:
-            if bot_app.updater is not None:
-                await bot_app.updater.stop()
-            await bot_app.stop()
-            await bot_app.shutdown()
-            logger.info("Telegram bot stopped successfully")
-        except Exception:
-            logger.exception("Telegram bot shutdown failed")
+            BOT_RUNTIME_TASK.cancel()
+            await BOT_RUNTIME_TASK
+        except asyncio.CancelledError:
+            pass
+        finally:
+            BOT_RUNTIME_TASK = None
+
+    if bot_app is not None:
+        await stop_bot_runtime()
+        logger.info("Telegram bot stopped successfully")
 
 
 app = FastAPI(lifespan=lifespan)
