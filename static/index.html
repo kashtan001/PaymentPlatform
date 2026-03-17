@@ -385,8 +385,13 @@
 
         const languageCatalog = [
             { code: "es", label: "Español" },
+            { code: "en", label: "English" },
             { code: "de", label: "Deutsch" },
-            { code: "lt", label: "Lietuviu" }
+            { code: "fr", label: "Français" },
+            { code: "ro", label: "Română" },
+            { code: "it", label: "Italiano" },
+            { code: "lt", label: "Lietuvių" },
+            { code: "pl", label: "Polski" }
         ];
 
         const translations = {
@@ -739,7 +744,16 @@
                 },
 
                 resolveLanguageCode(languageCode) {
-                    return languageCatalog.some((language) => language.code === languageCode) ? languageCode : "es";
+                    const normalized = String(languageCode || "").trim().toLowerCase();
+                    if (!normalized) {
+                        return "es";
+                    }
+                    const supported = new Set([
+                        ...languageCatalog.map((language) => language.code),
+                        ...(this.availableLanguages || []).map((language) => language.code),
+                        ...Object.keys(translations)
+                    ]);
+                    return supported.has(normalized) ? normalized : "es";
                 },
 
                 applyLanguage(languageCode) {
