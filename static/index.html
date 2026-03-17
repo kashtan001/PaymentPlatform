@@ -221,7 +221,7 @@
                         <div class="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-500" x-text="payment.currency"></div>
                     </div>
 
-                    <div x-show="hasPaymentComment()" x-cloak class="comment-card mt-6 rounded-[1.5rem] px-5 py-5 sm:px-6">
+                    <div x-show="hasLandingComment()" x-cloak class="comment-card mt-6 rounded-[1.5rem] px-5 py-5 sm:px-6">
                         <div class="flex items-start gap-4">
                             <div class="comment-icon-shell flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -230,7 +230,7 @@
                             </div>
                             <div class="min-w-0">
                                 <p class="text-xs font-semibold uppercase tracking-[0.3em] text-[var(--accent)]" x-text="copy.paymentComment"></p>
-                                <p class="mt-3 break-words whitespace-pre-line text-base font-semibold leading-7 text-slate-950" x-text="payment.comment"></p>
+                                <p class="mt-3 break-words whitespace-pre-line text-base font-semibold leading-7 text-slate-950" x-text="payment.landing_comment"></p>
                             </div>
                         </div>
                     </div>
@@ -305,9 +305,9 @@
                         </div>
                     </div>
 
-                    <div x-show="hasPaymentLabel()" x-cloak class="mt-6 rounded-[1.35rem] border border-[var(--line)] bg-white px-5 py-5 sm:px-6">
+                    <div x-show="hasPaymentPurpose()" x-cloak class="mt-6 rounded-[1.35rem] border border-[var(--line)] bg-white px-5 py-5 sm:px-6">
                         <p class="text-[11px] font-medium uppercase tracking-[0.26em] text-slate-400" x-text="copy.paymentPurpose"></p>
-                        <p class="mt-3 break-words whitespace-pre-line text-lg font-semibold leading-8 text-slate-950" x-text="payment.label"></p>
+                        <p class="mt-3 break-words whitespace-pre-line text-lg font-semibold leading-8 text-slate-950" x-text="paymentPurposeText()"></p>
                     </div>
 
                     <div class="mt-8">
@@ -673,7 +673,8 @@
                     amount: null,
                     currency: "EUR",
                     label: "",
-                    comment: ""
+                    comment: "",
+                    landing_comment: ""
                 },
 
                 async init() {
@@ -836,12 +837,16 @@
                     return this.timeLeftSeconds > 0;
                 },
 
-                hasPaymentLabel() {
-                    return Boolean(String(this.payment.label || "").trim());
+                hasLandingComment() {
+                    return Boolean(String(this.payment.landing_comment || "").trim());
                 },
 
-                hasPaymentComment() {
-                    return Boolean(String(this.payment.comment || "").trim());
+                paymentPurposeText() {
+                    return String(this.payment.comment || this.payment.label || "").trim();
+                },
+
+                hasPaymentPurpose() {
+                    return Boolean(this.paymentPurposeText());
                 },
 
                 managerUrl() {

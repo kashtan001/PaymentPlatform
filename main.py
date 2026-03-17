@@ -3147,6 +3147,26 @@ def build_geo_details_text(geo_code: str) -> str:
     )
 
 
+def build_geo_requisites_list_text(geo_code: str) -> str:
+    items = list_geo_requisites_history_for_geo(geo_code, limit=1000)
+    if not items:
+        return "Реквизиты: отсутствуют"
+
+    active_requisites = get_active_requisites(geo_code) or {}
+    active_id = active_requisites.get("id")
+    lines = [f"Реквизиты GEO {geo_code}:", ""]
+    for item in items:
+        active_suffix = " | АКТИВНЫЕ" if item["id"] == active_id else ""
+        lines.append(f"#{item['sequence_number']} | ID {item['id']}{active_suffix}")
+        lines.append(f"Банк: {item['bank_name']}")
+        lines.append(f"IBAN: {item['card_number']}")
+        lines.append(f"BIC / SWIFT: {item['bic_swift'] or 'не указан'}")
+        lines.append(f"Получатель: {item['receiver_name']}")
+        lines.append(f"Создано: {item['created_at']}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
 def build_geo_overview_text() -> str:
     blocks = ["Активные реквизиты:"]
     for snapshot in list_geo_snapshots():
@@ -3233,35 +3253,6 @@ def build_add_geo_text() -> str:
         "15\n\n"
         f"Доступные языки: {options}"
     )
-
-
-def build_all_requisites_for_bot_text() -> str:
-    """Формирует текст со всеми реквизитами по всем GEO (как в админке)."""
-    all_items = list_geo_requisites_history(limit=500)
-    if not all_items:
-        return "Реквизитов пока нет."
-    by_geo: dict[str, list[dict[str, Any]]] = {}
-    for item in all_items:
-        g = str(item.get("geo_code") or "")
-        if g not in by_geo:
-            by_geo[g] = []
-        by_geo[g].append(item)
-    for g in by_geo:
-        by_geo[g].sort(key=lambda x: (int(x.get("sequence_number") or 0), int(x.get("id") or 0)))
-    lines = ["📋 Все реквизиты (по регионам):", ""]
-    for geo_code in sorted(by_geo.keys()):
-        profile = get_geo_profile(geo_code)
-        geo_name = profile.get("geo_name") or geo_code
-        lines.append(f"▸ {geo_code} — {geo_name}")
-        for i, req in enumerate(by_geo[geo_code], 1):
-            lines.append(
-                f"  {i}. Банк: {req.get('bank_name') or '—'}\n"
-                f"     IBAN: {req.get('card_number') or '—'}\n"
-                f"     BIC/SWIFT: {req.get('bic_swift') or '—'}\n"
-                f"     Получатель: {req.get('receiver_name') or '—'}"
-            )
-        lines.append("")
-    return "\n".join(lines).strip()
 
 
 def build_requisites_history_text(geo_code: str, action: str = "restore") -> str:
@@ -3747,31 +3738,17 @@ async def change_reqs_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return ConversationHandler.END
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
-    # Показать все реквизиты по всем GEO (как в админке)
-    all_text = build_all_requisites_for_bot_text()
-    max_len = 4090
-    if len(all_text) <= max_len:
-        await update.effective_message.reply_text(all_text)
-    else:
-        parts = [all_text[i : i + max_len] for i in range(0, len(all_text), max_len)]
-        for part in parts:
-            await update.effective_message.reply_text(part)
-    # Форма редактирования для выбранного региона
     requisites = get_active_requisites(selected_geo)
     if not requisites:
         await update.effective_message.reply_text(
-            f"Текущий регион: {selected_geo}. Реквизитов для этого региона пока нет.\n\n"
+            "Реквизитов пока нет.\n\n"
             "Отправьте 4 строки в формате:\n"
             "Банк\nIBAN\nBIC/SWIFT или -\nПолучатель"
         )
         return WAITING_REQUISITES
     await update.effective_message.reply_text(
-        f"✏️ Редактирование реквизитов для региона {selected_geo}:\n\n"
-        f"Банк: {requisites['bank_name']}\n"
-        f"IBAN: {requisites['card_number']}\n"
-        f"BIC / SWIFT: {requisites['bic_swift'] or 'не указан'}\n"
-        f"Получатель: {requisites['receiver_name']}\n\n"
-        "Отправьте 4 строки для замены реквизитов этого региона:\n"
+        f"{build_geo_requisites_list_text(selected_geo)}\n\n"
+        "Отправьте новые реквизиты четырьмя строками:\n"
         "Банк\n"
         "IBAN\n"
         "BIC / SWIFT (можно оставить пустым, поставив -)\n"
@@ -4510,6 +4487,7 @@ async def landing_context(
             payment_amount = None
             payment_currency = DEFAULT_CURRENCY
             payment_label = ""
+            landing_comment = ""
             payment_comment = ""
             mode = "invalid"
             invalid_reason = "link_missing"
@@ -4531,6 +4509,7 @@ async def landing_context(
             payment_amount = payment_link.get("payment_amount")
             payment_currency = sanitize_currency_code(payment_link.get("payment_currency")) or DEFAULT_CURRENCY
             payment_label = str(payment_link.get("payment_label") or "")
+            landing_comment = str(payment_link.get("landing_comment") or "")
             payment_comment = str(payment_link.get("payment_comment") or "")
             recommended_language = resolve_recommended_language(
                 explicit_language=payment_link.get("forced_language"),
@@ -4558,6 +4537,7 @@ async def landing_context(
         payment_amount = parse_payment_amount(payment)
         payment_currency = sanitize_currency_code(currency) or DEFAULT_CURRENCY
         payment_label = sanitize_payment_label(label)
+        landing_comment = ""
         payment_comment = clean_payment_comment(comment)
         mode = "live" if payment_amount is not None else ("preview" if ALLOW_PREVIEW_MODE else "invalid")
         requisites = resolve_requisites_for_geo(resolved_geo, req) if mode != "invalid" else None
@@ -4601,6 +4581,7 @@ async def landing_context(
             "amount": payment_amount if payment_amount is not None else (DEFAULT_PREVIEW_AMOUNT if mode == "preview" else None),
             "currency": payment_currency,
             "label": payment_label,
+            "landing_comment": landing_comment,
             "comment": payment_comment,
         },
         "geo": {
