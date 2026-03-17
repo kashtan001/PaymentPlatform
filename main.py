@@ -146,6 +146,7 @@ WAITING_LINK_CURRENCY = 6
 WAITING_LINK_REQUISITES = 7
 WAITING_LINK_LABEL = 8
 WAITING_LINK_COMMENT = 9
+WAITING_LINK_PAYMENT_COMMENT = 15
 WAITING_LINK_MANAGER = 10
 WAITING_LINK_LANGUAGE = 11
 WAITING_ADD_REQ_GEO = 12
@@ -414,7 +415,8 @@ class CreatePaymentLinkPayload(BaseModel):
     language_code: str | None = None
     handler_user_id: int
     label: str = ""
-    comment: str = ""
+    comment: str = ""  # комментарий для лендинга (стандартная фраза)
+    payment_comment: str = ""  # комментарий к платежу (что указать при переводе)
 
 
 class ChannelPayload(BaseModel):
@@ -1290,6 +1292,7 @@ def init_db() -> None:
     ensure_column(conn, "payment_links", "payment_currency", "TEXT")
     ensure_column(conn, "payment_links", "forced_language", "TEXT")
     ensure_column(conn, "payment_links", "payment_label", "TEXT")
+    ensure_column(conn, "payment_links", "landing_comment", "TEXT")
     ensure_column(conn, "payment_links", "payment_comment", "TEXT")
     ensure_column(conn, "payment_links", "snapshot_handler_name", "TEXT")
     ensure_column(conn, "payment_links", "snapshot_handler_username", "TEXT")
@@ -1989,7 +1992,7 @@ def get_payment_link_by_token(link_token: str, mark_opened: bool = False) -> dic
         """
         SELECT
             id, link_token, status, geo_code, requisites_id, handler_user_id,
-            payment_amount, payment_currency, forced_language, payment_label, payment_comment,
+            payment_amount, payment_currency, forced_language, payment_label, landing_comment, payment_comment,
             snapshot_handler_name, snapshot_handler_username, snapshot_handler_telegram_url,
             snapshot_channel_name, snapshot_channel_logo_url,
             snapshot_bank_name, snapshot_card_number, snapshot_bic_swift, snapshot_receiver_name,
@@ -2027,7 +2030,7 @@ def list_payment_links(limit: int = 60) -> list[dict[str, Any]]:
         """
         SELECT
             id, link_token, status, geo_code, requisites_id, handler_user_id,
-            payment_amount, payment_currency, forced_language, payment_label, payment_comment,
+            payment_amount, payment_currency, forced_language, payment_label, landing_comment, payment_comment,
             snapshot_handler_name, snapshot_handler_username, snapshot_handler_telegram_url,
             snapshot_channel_name, snapshot_channel_logo_url,
             snapshot_bank_name, snapshot_card_number, snapshot_bic_swift, snapshot_receiver_name,
@@ -2053,7 +2056,8 @@ def create_payment_link_record(
     creator_role: str | None,
     currency_code: str | None = None,
     label: str = "",
-    comment: str = "",
+    landing_comment: str = "",
+    payment_comment: str = "",
     forced_language: str | None = None,
     handler_user_id: int | None = None,
 ) -> dict[str, Any]:
@@ -2071,20 +2075,21 @@ def create_payment_link_record(
     created_at = utc_now()
     expires_at = created_at + timedelta(minutes=refresh_minutes)
     clean_label = sanitize_payment_label(label)
-    clean_comment = clean_payment_comment(comment)
+    clean_landing = (landing_comment or "").strip()
+    payment_comment_cleaned = clean_payment_comment(payment_comment)
     safe_language = sanitize_language_code(forced_language)
     conn = get_connection()
     conn.execute(
         """
         INSERT INTO payment_links (
             link_token, status, geo_code, requisites_id, handler_user_id,
-            payment_amount, payment_currency, forced_language, payment_label, payment_comment,
+            payment_amount, payment_currency, forced_language, payment_label, landing_comment, payment_comment,
             snapshot_handler_name, snapshot_handler_username, snapshot_handler_telegram_url,
             snapshot_channel_name, snapshot_channel_logo_url,
             snapshot_bank_name, snapshot_card_number, snapshot_bic_swift, snapshot_receiver_name,
             created_by_user_id, creator_role, created_at, expires_at, open_count
         )
-        VALUES (?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        VALUES (?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         """,
         (
             link_token,
@@ -2095,7 +2100,8 @@ def create_payment_link_record(
             sanitize_currency_code(currency_code) or DEFAULT_CURRENCY,
             safe_language,
             clean_label or None,
-            clean_comment or None,
+            clean_landing or None,
+            payment_comment_cleaned or None,
             handler.get("manager_name"),
             handler.get("username"),
             handler.get("manager_telegram_url"),
@@ -3229,6 +3235,35 @@ def build_add_geo_text() -> str:
     )
 
 
+def build_all_requisites_for_bot_text() -> str:
+    """Формирует текст со всеми реквизитами по всем GEO (как в админке)."""
+    all_items = list_geo_requisites_history(limit=500)
+    if not all_items:
+        return "Реквизитов пока нет."
+    by_geo: dict[str, list[dict[str, Any]]] = {}
+    for item in all_items:
+        g = str(item.get("geo_code") or "")
+        if g not in by_geo:
+            by_geo[g] = []
+        by_geo[g].append(item)
+    for g in by_geo:
+        by_geo[g].sort(key=lambda x: (int(x.get("sequence_number") or 0), int(x.get("id") or 0)))
+    lines = ["📋 Все реквизиты (по регионам):", ""]
+    for geo_code in sorted(by_geo.keys()):
+        profile = get_geo_profile(geo_code)
+        geo_name = profile.get("geo_name") or geo_code
+        lines.append(f"▸ {geo_code} — {geo_name}")
+        for i, req in enumerate(by_geo[geo_code], 1):
+            lines.append(
+                f"  {i}. Банк: {req.get('bank_name') or '—'}\n"
+                f"     IBAN: {req.get('card_number') or '—'}\n"
+                f"     BIC/SWIFT: {req.get('bic_swift') or '—'}\n"
+                f"     Получатель: {req.get('receiver_name') or '—'}"
+            )
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
 def build_requisites_history_text(geo_code: str, action: str = "restore") -> str:
     items = list_geo_requisites_history_for_geo(geo_code)
     if not items:
@@ -3300,6 +3335,10 @@ def build_link_language_selection_text() -> str:
 
 def build_landing_comment_selection_text() -> str:
     return "Выберите кнопку с комментарием для лендинга"
+
+
+def build_payment_comment_prompt_text() -> str:
+    return "Какой комментарий к платежу прописать? (клиент увидит это на лендинге и должен указать при переводе). Можно отправить «-» или пустое сообщение, если не нужен."
 
 
 def landing_comment_picker_keyboard() -> ReplyKeyboardMarkup:
@@ -3708,20 +3747,31 @@ async def change_reqs_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return ConversationHandler.END
     user_id = update.effective_user.id if update.effective_user else None
     selected_geo = get_selected_geo(context, user_id)
+    # Показать все реквизиты по всем GEO (как в админке)
+    all_text = build_all_requisites_for_bot_text()
+    max_len = 4090
+    if len(all_text) <= max_len:
+        await update.effective_message.reply_text(all_text)
+    else:
+        parts = [all_text[i : i + max_len] for i in range(0, len(all_text), max_len)]
+        for part in parts:
+            await update.effective_message.reply_text(part)
+    # Форма редактирования для выбранного региона
     requisites = get_active_requisites(selected_geo)
     if not requisites:
         await update.effective_message.reply_text(
-            "Реквизитов пока нет.\n\n"
+            f"Текущий регион: {selected_geo}. Реквизитов для этого региона пока нет.\n\n"
             "Отправьте 4 строки в формате:\n"
             "Банк\nIBAN\nBIC/SWIFT или -\nПолучатель"
         )
         return WAITING_REQUISITES
     await update.effective_message.reply_text(
+        f"✏️ Редактирование реквизитов для региона {selected_geo}:\n\n"
         f"Банк: {requisites['bank_name']}\n"
         f"IBAN: {requisites['card_number']}\n"
         f"BIC / SWIFT: {requisites['bic_swift'] or 'не указан'}\n"
         f"Получатель: {requisites['receiver_name']}\n\n"
-        "Отправьте новые реквизиты четырьмя строками:\n"
+        "Отправьте 4 строки для замены реквизитов этого региона:\n"
         "Банк\n"
         "IBAN\n"
         "BIC / SWIFT (можно оставить пустым, поставив -)\n"
@@ -4037,6 +4087,7 @@ async def send_ready_payment_link(
     forced_language: str | None = None,
     clean_label: str = "",
     clean_comment: str = "",
+    payment_comment: str = "",
 ) -> int:
     handler_contact = resolve_handler_contact(manager_id, manager_link)
     try:
@@ -4047,7 +4098,8 @@ async def send_ready_payment_link(
             creator_role=get_bot_user_role(user_id),
             currency_code=currency_code,
             label=clean_label,
-            comment=clean_comment,
+            landing_comment=clean_comment,
+            payment_comment=payment_comment,
             forced_language=forced_language,
             handler_user_id=manager_id,
         )
@@ -4074,6 +4126,7 @@ async def send_ready_payment_link(
     context.user_data.pop("temp_language", None)
     context.user_data.pop("temp_label", None)
     context.user_data.pop("temp_comment", None)
+    context.user_data.pop("temp_payment_comment", None)
 
     log_bot_activity(user_id, "create_link", geo_code=selected_geo, payload=f"{amount:.2f}")
     language_label = LANDING_COMMENT_BUTTON_BY_CODE.get(forced_language or "", forced_language or "auto")
@@ -4083,6 +4136,7 @@ async def send_ready_payment_link(
         f"Реквизиты: зафиксирован текущий активный комплект GEO\n"
         f"Обработчик: {handler.get('manager_name') or 'не выбран'}\n"
         f"Комментарий для лендинга: {clean_comment or 'не указан'}\n"
+        f"Комментарий к платежу: {payment_comment or 'не указан'}\n"
         f"Язык лендинга: {language_label}\n"
         f"Ссылка: {link}",
         reply_markup=main_keyboard(get_bot_user_role(user_id)),
@@ -4101,6 +4155,7 @@ async def create_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data.pop("temp_language", None)
     context.user_data.pop("temp_label", None)
     context.user_data.pop("temp_comment", None)
+    context.user_data.pop("temp_payment_comment", None)
     context.user_data.pop("temp_currency", None)
     context.user_data.pop("temp_geo", None)
     await update.effective_message.reply_text("Введите сумму к оплате, например: 250")
@@ -4187,6 +4242,7 @@ async def create_link_manager(update: Update, context: ContextTypes.DEFAULT_TYPE
     manager_link = normalize_manager_link(context.user_data.get("temp_manager_link"))
     clean_label = str(context.user_data.get("temp_label", ""))
     clean_comment = str(context.user_data.get("temp_comment", ""))
+    payment_comment_text = str(context.user_data.get("temp_payment_comment", ""))
     currency_code = context.user_data.get("temp_currency")
     safe_language = sanitize_language_code(context.user_data.get("temp_language"))
     return await send_ready_payment_link(
@@ -4202,6 +4258,7 @@ async def create_link_manager(update: Update, context: ContextTypes.DEFAULT_TYPE
         forced_language=safe_language,
         clean_label=clean_label,
         clean_comment=clean_comment,
+        payment_comment=payment_comment_text,
     )
 
 
@@ -4216,6 +4273,15 @@ async def create_link_comment(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     context.user_data["temp_comment"] = selected_option["comment"]
     context.user_data["temp_language"] = selected_option["code"]
+    await update.effective_message.reply_text(
+        build_payment_comment_prompt_text(),
+    )
+    return WAITING_LINK_PAYMENT_COMMENT
+
+
+async def create_link_payment_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    raw_text = (update.effective_message.text or "").strip()
+    context.user_data["temp_payment_comment"] = raw_text if raw_text and raw_text != "-" else ""
     selected_geo = str(context.user_data.get("temp_geo") or "")
     user_id = update.effective_user.id if update.effective_user else None
     await update.effective_message.reply_text(
@@ -4292,6 +4358,7 @@ if bot_app is not None:
             WAITING_LINK_CURRENCY: [MessageHandler(conversation_text_filter, create_link_currency)],
             WAITING_LINK_REQUISITES: [MessageHandler(conversation_text_filter, create_link_requisites)],
             WAITING_LINK_COMMENT: [MessageHandler(conversation_text_filter, create_link_comment)],
+            WAITING_LINK_PAYMENT_COMMENT: [MessageHandler(conversation_text_filter, create_link_payment_comment)],
             WAITING_LINK_MANAGER: [MessageHandler(conversation_text_filter, create_link_manager)],
         },
         fallbacks=[
@@ -4642,7 +4709,8 @@ async def admin_create_payment_link(payload: CreatePaymentLinkPayload, request: 
         creator_role=session.get("role"),
         currency_code=payload.currency_code,
         label=payload.label,
-        comment=payload.comment,
+        landing_comment=payload.comment,
+        payment_comment=payload.payment_comment,
         forced_language=payload.language_code,
         handler_user_id=payload.handler_user_id,
     )
