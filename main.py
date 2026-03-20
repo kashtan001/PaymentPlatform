@@ -4586,13 +4586,20 @@ async def landing_context(
             expires_at = parse_iso_datetime(payment_link.get("expires_at"))
             refresh_seconds = max(0, int((expires_at - utc_now()).total_seconds())) if expires_at else 0
             mode = "expired" if payment_link_status == "expired" or refresh_seconds <= 0 else "live"
+            if mode == "live":
+                fresh_req = get_active_requisites(resolved_geo)
+                if fresh_req is not None:
+                    requisites = fresh_req
+                else:
+                    mode = "invalid"
+                    invalid_reason = "requisites_missing"
+                    refresh_seconds = 0
             if mode == "expired":
                 invalid_reason = "link_expired"
                 refresh_seconds = 0
-            if mode == "expired" and get_active_requisites(resolved_geo) is None:
-                mode = "invalid"
-                invalid_reason = "requisites_missing"
-                refresh_seconds = 0
+                if get_active_requisites(resolved_geo) is None:
+                    mode = "invalid"
+                    invalid_reason = "requisites_missing"
     else:
         resolved_geo = resolve_geo_code(geo, visitor.get("country_code"), browser_language)
         profile = get_geo_profile(resolved_geo)
