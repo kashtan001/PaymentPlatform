@@ -413,7 +413,7 @@
                 paymentComment: "Important!",
                 timerLabel: "Details refresh in",
                 timerLive: "Live",
-                timerText: "When the timer ends, this link becomes inactive. Request a new link.",
+                timerText: "When the timer ends, this page refreshes to show the latest payment details.",
                 paymentDetails: "Payment details",
                 paymentDetailsTitle: "Transfer using the details below",
                 paymentDetailsHint: "Copy the bank details exactly as shown on this page.",
@@ -447,7 +447,7 @@
                 paymentComment: "Importante!",
                 timerLabel: "Los datos se actualizaran en",
                 timerLive: "Activo",
-                timerText: "Cuando termine el temporizador, este enlace dejará de estar activo. Solicita un nuevo enlace.",
+                timerText: "Al terminar el temporizador, la página se actualiza para mostrar los datos de pago más recientes.",
                 paymentDetails: "Datos de pago",
                 paymentDetailsTitle: "Haz la transferencia con estos datos",
                 paymentDetailsHint: "Copia los datos exactamente como aparecen en esta página.",
@@ -481,7 +481,7 @@
                 paymentComment: "Importante!",
                 timerLabel: "I dati si aggiorneranno tra",
                 timerLive: "Attivo",
-                timerText: "Quando il timer termina, questo link diventa inattivo. Richiedi un nuovo link.",
+                timerText: "Al termine del timer, la pagina si aggiorna per mostrare i dati di pagamento aggiornati.",
                 paymentDetails: "Dettagli di pagamento",
                 paymentDetailsTitle: "Effettua il trasferimento con questi dati",
                 paymentDetailsHint: "Copia i dati esattamente come sono mostrati in questa pagina.",
@@ -515,7 +515,7 @@
                 paymentComment: "Wichtig!",
                 timerLabel: "Daten aktualisieren sich in",
                 timerLive: "Aktiv",
-                timerText: "Wenn der Timer endet, wird dieser Link inaktiv. Fordere einen neuen Link an.",
+                timerText: "Wenn der Timer endet, wird die Seite aktualisiert, um die aktuellen Zahlungsdaten anzuzeigen.",
                 paymentDetails: "Zahlungsdaten",
                 paymentDetailsTitle: "Überweise mit den folgenden Daten",
                 paymentDetailsHint: "Kopiere die Daten genau so, wie sie auf dieser Seite stehen.",
@@ -549,7 +549,7 @@
                 paymentComment: "Svarbu!",
                 timerLabel: "Rekvizitai atsinaujins po",
                 timerLive: "Aktyvu",
-                timerText: "Pasibaigus laikmačiui, si nuoroda taps neaktyvi. Paprasykite naujos nuorodos.",
+                timerText: "Laikmačiui pasibaigus, puslapis atsinaujins ir bus rodomi naujausi mokėjimo duomenys.",
                 paymentDetails: "Mokejimo rekvizitai",
                 paymentDetailsTitle: "Atlikite pavedima naudodami siuos rekvizitus",
                 paymentDetailsHint: "Nukopijuokite banko rekvizitus tiksliai taip, kaip jie pateikti siame puslapyje.",
@@ -583,7 +583,7 @@
                 paymentComment: "Important !",
                 timerLabel: "Les coordonnees seront actualisees dans",
                 timerLive: "Actif",
-                timerText: "Quand le minuteur se termine, ce lien devient inactif. Demandez un nouveau lien.",
+                timerText: "Quand le minuteur se termine, la page se rafraîchit pour afficher les coordonnées de paiement à jour.",
                 paymentDetails: "Coordonnées de paiement",
                 paymentDetailsTitle: "Effectuez le virement avec les coordonnées ci-dessous",
                 paymentDetailsHint: "Copiez les coordonnées exactement comme elles apparaissent sur cette page.",
@@ -617,7 +617,7 @@
                 paymentComment: "Important!",
                 timerLabel: "Datele se vor actualiza în",
                 timerLive: "Activ",
-                timerText: "Când cronometrul se termină, acest link devine inactiv. Cere un nou link.",
+                timerText: "Când cronometrul se termină, pagina se actualizează pentru a afișa cele mai recente detalii de plată.",
                 paymentDetails: "Detalii de plată",
                 paymentDetailsTitle: "Efectuați transferul folosind datele de mai jos",
                 paymentDetailsHint: "Copiați datele bancare exact așa cum apar pe această pagină.",
@@ -682,8 +682,7 @@
                     landing_comment: ""
                 },
 
-                async init() {
-                    const context = await this.fetchContext();
+                applyLandingContext(context) {
                     this.mode = context.mode || "invalid";
                     this.invalidReason = String(context.invalid_reason || "");
                     this.geo = context.geo || this.geo;
@@ -694,6 +693,21 @@
                     this.visitToken = String(context.visit?.token || "");
                     this.availableLanguages = context.available_languages || languageCatalog;
                     this.recommendedLanguage = this.resolveLanguageCode(context.recommended_language || this.geo.default_language || "es");
+                    this.restartCountdown(Number(context.timer?.refresh_seconds || this.geo.refresh_seconds || 0));
+                },
+
+                async refreshLandingContext() {
+                    try {
+                        const context = await this.fetchContext({ landingRefresh: true });
+                        this.applyLandingContext(context);
+                    } catch (_) {
+                        /* fetchContext returns a fallback payload on failure */
+                    }
+                },
+
+                async init() {
+                    const context = await this.fetchContext();
+                    this.applyLandingContext(context);
 
                     const queryParams = new URLSearchParams(window.location.search);
                     const queryLang = queryParams.get("lang");
@@ -707,7 +721,6 @@
                             : this.resolveLanguageCode(queryLang || storedLang || this.recommendedLanguage || "es"));
                     this.applyLanguage(initialLanguage);
 
-                    this.restartCountdown(Number(context.timer?.refresh_seconds || this.geo.refresh_seconds || 0));
                     this.loading = false;
 
                     this.$nextTick(() => {
@@ -715,10 +728,13 @@
                     });
                 },
 
-                async fetchContext() {
+                async fetchContext(options = {}) {
+                    const landingRefresh = options.landingRefresh === true;
                     const endpoint = this.apiUrl(`/api/landing-context${window.location.search || ""}`);
                     try {
-                        const response = await fetch(endpoint);
+                        const response = await fetch(endpoint, {
+                            headers: landingRefresh ? { "X-Landing-Refresh": "1" } : {},
+                        });
                         if (!response.ok) {
                             throw new Error("Context load failed");
                         }
@@ -884,6 +900,7 @@
                 restartCountdown(seconds) {
                     if (this.countdownTimerId) {
                         clearInterval(this.countdownTimerId);
+                        this.countdownTimerId = null;
                     }
                     this.timeLeftSeconds = Math.max(0, Number(seconds || 0));
                     if (!this.timeLeftSeconds) {
@@ -895,8 +912,7 @@
                             this.countdownTimerId = null;
                             this.timeLeftSeconds = 0;
                             this.showAfterPayment = false;
-                            this.mode = "expired";
-                            this.invalidReason = "link_expired";
+                            this.refreshLandingContext();
                             return;
                         }
                         this.timeLeftSeconds -= 1;

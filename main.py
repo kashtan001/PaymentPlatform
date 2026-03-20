@@ -1983,6 +1983,61 @@ def expire_payment_link_if_needed(record: dict[str, Any], conn: sqlite3.Connecti
     return updated
 
 
+def roll_payment_link_refresh_window(record: dict[str, Any], conn: sqlite3.Connection) -> dict[str, Any]:
+    """
+    Когда истекло окно expires_at у активной ссылки: подтянуть актуальные реквизиты GEO,
+    продлить таймер или пометить ссылку истёкшей, если реквизитов больше нет.
+    """
+    geo_code = str(record.get("geo_code") or "")
+    profile = get_geo_profile(geo_code)
+    refresh_minutes = max(1, int(profile.get("refresh_minutes") or DEFAULT_REFRESH_MINUTES))
+    active_req = get_active_requisites(geo_code)
+    link_id = record.get("id")
+    if active_req is None:
+        expired_at = utc_now_iso()
+        conn.execute(
+            """
+            UPDATE payment_links
+            SET status = 'expired', expired_at = COALESCE(expired_at, ?)
+            WHERE id = ?
+            """,
+            (expired_at, link_id),
+        )
+        return {**record, "status": "expired", "expired_at": record.get("expired_at") or expired_at}
+    new_expires = utc_now() + timedelta(minutes=refresh_minutes)
+    conn.execute(
+        """
+        UPDATE payment_links
+        SET
+            expires_at = ?,
+            requisites_id = ?,
+            snapshot_bank_name = ?,
+            snapshot_card_number = ?,
+            snapshot_bic_swift = ?,
+            snapshot_receiver_name = ?
+        WHERE id = ?
+        """,
+        (
+            new_expires.isoformat(),
+            active_req.get("id"),
+            active_req.get("bank_name"),
+            active_req.get("card_number"),
+            (active_req.get("bic_swift") or ""),
+            active_req.get("receiver_name"),
+            link_id,
+        ),
+    )
+    return {
+        **record,
+        "expires_at": new_expires.isoformat(),
+        "requisites_id": active_req.get("id"),
+        "snapshot_bank_name": active_req.get("bank_name"),
+        "snapshot_card_number": active_req.get("card_number"),
+        "snapshot_bic_swift": (active_req.get("bic_swift") or ""),
+        "snapshot_receiver_name": active_req.get("receiver_name"),
+    }
+
+
 def get_payment_link_by_token(link_token: str, mark_opened: bool = False) -> dict[str, Any] | None:
     clean_token = (link_token or "").strip()
     if not clean_token:
@@ -2006,7 +2061,12 @@ def get_payment_link_by_token(link_token: str, mark_opened: bool = False) -> dic
     if row is None:
         conn.close()
         return None
-    record = expire_payment_link_if_needed(dict(row), conn)
+    record = dict(row)
+    if record.get("status") == "active":
+        expires_at = parse_iso_datetime(record.get("expires_at"))
+        if expires_at is not None and expires_at <= utc_now():
+            record = roll_payment_link_refresh_window(record, conn)
+    record = expire_payment_link_if_needed(record, conn)
     if mark_opened and record.get("status") == "active":
         opened_at = utc_now_iso()
         conn.execute(
@@ -2043,7 +2103,12 @@ def list_payment_links(limit: int = 60) -> list[dict[str, Any]]:
     ).fetchall()
     result: list[dict[str, Any]] = []
     for row in rows:
-        result.append(expire_payment_link_if_needed(dict(row), conn))
+        record = dict(row)
+        if record.get("status") == "active":
+            ea = parse_iso_datetime(record.get("expires_at"))
+            if ea is not None and ea <= utc_now():
+                record = roll_payment_link_refresh_window(record, conn)
+        result.append(expire_payment_link_if_needed(record, conn))
     conn.commit()
     conn.close()
     return result
@@ -2122,8 +2187,8 @@ def create_payment_link_record(
     return get_payment_link_by_token(link_token) or {}
 
 
-def resolve_payment_link_context(link_token: str) -> dict[str, Any] | None:
-    record = get_payment_link_by_token(link_token, mark_opened=True)
+def resolve_payment_link_context(link_token: str, mark_opened: bool = True) -> dict[str, Any] | None:
+    record = get_payment_link_by_token(link_token, mark_opened=mark_opened)
     if record is None:
         return None
     snapshot_handler = {
@@ -4471,7 +4536,8 @@ async def landing_context(
     payment_link_status = ""
 
     if link:
-        link_context = resolve_payment_link_context(link)
+        landing_refresh = request.headers.get("x-landing-refresh") == "1"
+        link_context = resolve_payment_link_context(link, mark_opened=not landing_refresh)
         if link_context is None:
             resolved_geo = resolve_geo_code(geo, visitor.get("country_code"), browser_language)
             profile = get_geo_profile(resolved_geo)
@@ -4522,6 +4588,10 @@ async def landing_context(
             mode = "expired" if payment_link_status == "expired" or refresh_seconds <= 0 else "live"
             if mode == "expired":
                 invalid_reason = "link_expired"
+                refresh_seconds = 0
+            if mode == "expired" and get_active_requisites(resolved_geo) is None:
+                mode = "invalid"
+                invalid_reason = "requisites_missing"
                 refresh_seconds = 0
     else:
         resolved_geo = resolve_geo_code(geo, visitor.get("country_code"), browser_language)
