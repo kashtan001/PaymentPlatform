@@ -221,7 +221,7 @@
                         <div class="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-500" x-text="payment.currency"></div>
                     </div>
 
-                    <div x-show="hasLandingComment()" x-cloak class="comment-card mt-6 rounded-[1.5rem] px-5 py-5 sm:px-6">
+                    <div x-show="hasPaymentComment()" x-cloak class="comment-card mt-6 rounded-[1.5rem] px-5 py-5 sm:px-6">
                         <div class="flex items-start gap-4">
                             <div class="comment-icon-shell flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -230,7 +230,7 @@
                             </div>
                             <div class="min-w-0">
                                 <p class="text-xs font-semibold uppercase tracking-[0.3em] text-[var(--accent)]" x-text="copy.paymentComment"></p>
-                                <p class="mt-3 break-words whitespace-pre-line text-base font-semibold leading-7 text-slate-950" x-text="payment.landing_comment"></p>
+                                <p class="mt-3 break-words whitespace-pre-line text-base font-semibold leading-7 text-slate-950" x-text="payment.comment"></p>
                             </div>
                         </div>
                     </div>
@@ -261,13 +261,13 @@
                     <div class="mt-6 overflow-hidden rounded-[1.5rem] border border-[var(--line)] bg-white">
                         <div class="detail-row flex items-start justify-between gap-4 px-5 py-5 sm:px-6">
                             <div class="min-w-0">
-                                <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.bank"></p>
-                                <p class="detail-value-strong mt-2 font-semibold text-slate-950" x-text="requisites.bank_name"></p>
+                                <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.receiver"></p>
+                                <p class="detail-value-strong mt-2 font-semibold text-slate-950" x-text="requisites.receiver_name"></p>
                             </div>
-                            <button type="button" @click="copyField('bank', requisites.bank_name)"
+                            <button type="button" @click="copyField('receiver', requisites.receiver_name)"
                                     class="-mr-1 -mt-1 shrink-0 self-start rounded-full px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] transition sm:-mr-2 sm:-mt-2"
-                                    :class="copiedField === 'bank' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800'"
-                                    x-text="copiedField === 'bank' ? '✓ ' + copy.copied : copy.copyAction"></button>
+                                    :class="copiedField === 'receiver' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800'"
+                                    x-text="copiedField === 'receiver' ? '✓ ' + copy.copied : copy.copyAction"></button>
                         </div>
 
                         <div class="detail-row flex items-start justify-between gap-4 px-5 py-5 sm:px-6">
@@ -295,19 +295,19 @@
 
                         <div class="detail-row flex items-start justify-between gap-4 px-5 py-5 sm:px-6">
                             <div class="min-w-0">
-                                <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.receiver"></p>
-                                <p class="detail-value-strong mt-2 font-semibold text-slate-950" x-text="requisites.receiver_name"></p>
+                                <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.bank"></p>
+                                <p class="detail-value-strong mt-2 font-semibold text-slate-950" x-text="requisites.bank_name"></p>
                             </div>
-                            <button type="button" @click="copyField('receiver', requisites.receiver_name)"
+                            <button type="button" @click="copyField('bank', requisites.bank_name)"
                                     class="-mr-1 -mt-1 shrink-0 self-start rounded-full px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] transition sm:-mr-2 sm:-mt-2"
-                                    :class="copiedField === 'receiver' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800'"
-                                    x-text="copiedField === 'receiver' ? '✓ ' + copy.copied : copy.copyAction"></button>
+                                    :class="copiedField === 'bank' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800'"
+                                    x-text="copiedField === 'bank' ? '✓ ' + copy.copied : copy.copyAction"></button>
                         </div>
                     </div>
 
-                    <div x-show="hasPaymentPurpose()" x-cloak class="mt-6 rounded-[1.35rem] border border-[var(--line)] bg-white px-5 py-5 sm:px-6">
+                    <div x-show="hasPaymentLabel()" x-cloak class="mt-6 rounded-[1.35rem] border border-[var(--line)] bg-white px-5 py-5 sm:px-6">
                         <p class="text-[11px] font-medium uppercase tracking-[0.26em] text-slate-400" x-text="copy.paymentPurpose"></p>
-                        <p class="mt-3 break-words whitespace-pre-line text-lg font-semibold leading-8 text-slate-950" x-text="paymentPurposeText()"></p>
+                        <p class="mt-3 break-words whitespace-pre-line text-lg font-semibold leading-8 text-slate-950" x-text="payment.label"></p>
                     </div>
 
                     <div class="mt-8">
@@ -385,13 +385,8 @@
 
         const languageCatalog = [
             { code: "es", label: "Español" },
-            { code: "en", label: "English" },
             { code: "de", label: "Deutsch" },
-            { code: "fr", label: "Français" },
-            { code: "ro", label: "Română" },
-            { code: "it", label: "Italiano" },
-            { code: "lt", label: "Lietuvių" },
-            { code: "pl", label: "Polski" }
+            { code: "lt", label: "Lietuviu" }
         ];
 
         const translations = {
@@ -413,7 +408,7 @@
                 paymentComment: "Important!",
                 timerLabel: "Details refresh in",
                 timerLive: "Live",
-                timerText: "When the timer ends, this page refreshes to show the latest payment details.",
+                timerText: "When the timer ends, this link becomes inactive. Request a new link.",
                 paymentDetails: "Payment details",
                 paymentDetailsTitle: "Transfer using the details below",
                 paymentDetailsHint: "Copy the bank details exactly as shown on this page.",
@@ -447,7 +442,7 @@
                 paymentComment: "Importante!",
                 timerLabel: "Los datos se actualizaran en",
                 timerLive: "Activo",
-                timerText: "Al terminar el temporizador, la página se actualiza para mostrar los datos de pago más recientes.",
+                timerText: "Cuando termine el temporizador, este enlace dejará de estar activo. Solicita un nuevo enlace.",
                 paymentDetails: "Datos de pago",
                 paymentDetailsTitle: "Haz la transferencia con estos datos",
                 paymentDetailsHint: "Copia los datos exactamente como aparecen en esta página.",
@@ -481,7 +476,7 @@
                 paymentComment: "Importante!",
                 timerLabel: "I dati si aggiorneranno tra",
                 timerLive: "Attivo",
-                timerText: "Al termine del timer, la pagina si aggiorna per mostrare i dati di pagamento aggiornati.",
+                timerText: "Quando il timer termina, questo link diventa inattivo. Richiedi un nuovo link.",
                 paymentDetails: "Dettagli di pagamento",
                 paymentDetailsTitle: "Effettua il trasferimento con questi dati",
                 paymentDetailsHint: "Copia i dati esattamente come sono mostrati in questa pagina.",
@@ -515,7 +510,7 @@
                 paymentComment: "Wichtig!",
                 timerLabel: "Daten aktualisieren sich in",
                 timerLive: "Aktiv",
-                timerText: "Wenn der Timer endet, wird die Seite aktualisiert, um die aktuellen Zahlungsdaten anzuzeigen.",
+                timerText: "Wenn der Timer endet, wird dieser Link inaktiv. Fordere einen neuen Link an.",
                 paymentDetails: "Zahlungsdaten",
                 paymentDetailsTitle: "Überweise mit den folgenden Daten",
                 paymentDetailsHint: "Kopiere die Daten genau so, wie sie auf dieser Seite stehen.",
@@ -549,7 +544,7 @@
                 paymentComment: "Svarbu!",
                 timerLabel: "Rekvizitai atsinaujins po",
                 timerLive: "Aktyvu",
-                timerText: "Laikmačiui pasibaigus, puslapis atsinaujins ir bus rodomi naujausi mokėjimo duomenys.",
+                timerText: "Pasibaigus laikmačiui, si nuoroda taps neaktyvi. Paprasykite naujos nuorodos.",
                 paymentDetails: "Mokejimo rekvizitai",
                 paymentDetailsTitle: "Atlikite pavedima naudodami siuos rekvizitus",
                 paymentDetailsHint: "Nukopijuokite banko rekvizitus tiksliai taip, kaip jie pateikti siame puslapyje.",
@@ -583,7 +578,7 @@
                 paymentComment: "Important !",
                 timerLabel: "Les coordonnees seront actualisees dans",
                 timerLive: "Actif",
-                timerText: "Quand le minuteur se termine, la page se rafraîchit pour afficher les coordonnées de paiement à jour.",
+                timerText: "Quand le minuteur se termine, ce lien devient inactif. Demandez un nouveau lien.",
                 paymentDetails: "Coordonnées de paiement",
                 paymentDetailsTitle: "Effectuez le virement avec les coordonnées ci-dessous",
                 paymentDetailsHint: "Copiez les coordonnées exactement comme elles apparaissent sur cette page.",
@@ -617,7 +612,7 @@
                 paymentComment: "Important!",
                 timerLabel: "Datele se vor actualiza în",
                 timerLive: "Activ",
-                timerText: "Când cronometrul se termină, pagina se actualizează pentru a afișa cele mai recente detalii de plată.",
+                timerText: "Când cronometrul se termină, acest link devine inactiv. Cere un nou link.",
                 paymentDetails: "Detalii de plată",
                 paymentDetailsTitle: "Efectuați transferul folosind datele de mai jos",
                 paymentDetailsHint: "Copiați datele bancare exact așa cum apar pe această pagină.",
@@ -678,11 +673,11 @@
                     amount: null,
                     currency: "EUR",
                     label: "",
-                    comment: "",
-                    landing_comment: ""
+                    comment: ""
                 },
 
-                applyLandingContext(context) {
+                async init() {
+                    const context = await this.fetchContext();
                     this.mode = context.mode || "invalid";
                     this.invalidReason = String(context.invalid_reason || "");
                     this.geo = context.geo || this.geo;
@@ -693,21 +688,6 @@
                     this.visitToken = String(context.visit?.token || "");
                     this.availableLanguages = context.available_languages || languageCatalog;
                     this.recommendedLanguage = this.resolveLanguageCode(context.recommended_language || this.geo.default_language || "es");
-                    this.restartCountdown(Number(context.timer?.refresh_seconds || this.geo.refresh_seconds || 0));
-                },
-
-                async refreshLandingContext() {
-                    try {
-                        const context = await this.fetchContext({ landingRefresh: true });
-                        this.applyLandingContext(context);
-                    } catch (_) {
-                        /* fetchContext returns a fallback payload on failure */
-                    }
-                },
-
-                async init() {
-                    const context = await this.fetchContext();
-                    this.applyLandingContext(context);
 
                     const queryParams = new URLSearchParams(window.location.search);
                     const queryLang = queryParams.get("lang");
@@ -721,6 +701,7 @@
                             : this.resolveLanguageCode(queryLang || storedLang || this.recommendedLanguage || "es"));
                     this.applyLanguage(initialLanguage);
 
+                    this.restartCountdown(Number(context.timer?.refresh_seconds || this.geo.refresh_seconds || 0));
                     this.loading = false;
 
                     this.$nextTick(() => {
@@ -728,13 +709,10 @@
                     });
                 },
 
-                async fetchContext(options = {}) {
-                    const landingRefresh = options.landingRefresh === true;
+                async fetchContext() {
                     const endpoint = this.apiUrl(`/api/landing-context${window.location.search || ""}`);
                     try {
-                        const response = await fetch(endpoint, {
-                            headers: landingRefresh ? { "X-Landing-Refresh": "1" } : {},
-                        });
+                        const response = await fetch(endpoint);
                         if (!response.ok) {
                             throw new Error("Context load failed");
                         }
@@ -760,16 +738,7 @@
                 },
 
                 resolveLanguageCode(languageCode) {
-                    const normalized = String(languageCode || "").trim().toLowerCase();
-                    if (!normalized) {
-                        return "es";
-                    }
-                    const supported = new Set([
-                        ...languageCatalog.map((language) => language.code),
-                        ...(this.availableLanguages || []).map((language) => language.code),
-                        ...Object.keys(translations)
-                    ]);
-                    return supported.has(normalized) ? normalized : "es";
+                    return languageCatalog.some((language) => language.code === languageCode) ? languageCode : "es";
                 },
 
                 applyLanguage(languageCode) {
@@ -867,16 +836,12 @@
                     return this.timeLeftSeconds > 0;
                 },
 
-                hasLandingComment() {
-                    return Boolean(String(this.payment.landing_comment || "").trim());
+                hasPaymentLabel() {
+                    return Boolean(String(this.payment.label || "").trim());
                 },
 
-                paymentPurposeText() {
-                    return String(this.payment.comment || this.payment.label || "").trim();
-                },
-
-                hasPaymentPurpose() {
-                    return Boolean(this.paymentPurposeText());
+                hasPaymentComment() {
+                    return Boolean(String(this.payment.comment || "").trim());
                 },
 
                 managerUrl() {
@@ -900,7 +865,6 @@
                 restartCountdown(seconds) {
                     if (this.countdownTimerId) {
                         clearInterval(this.countdownTimerId);
-                        this.countdownTimerId = null;
                     }
                     this.timeLeftSeconds = Math.max(0, Number(seconds || 0));
                     if (!this.timeLeftSeconds) {
@@ -912,7 +876,8 @@
                             this.countdownTimerId = null;
                             this.timeLeftSeconds = 0;
                             this.showAfterPayment = false;
-                            this.refreshLandingContext();
+                            this.mode = "expired";
+                            this.invalidReason = "link_expired";
                             return;
                         }
                         this.timeLeftSeconds -= 1;
