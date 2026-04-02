@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -138,7 +138,15 @@
         }
 
         .detail-value-iban {
-            font-size: clamp(0.92rem, 0.81rem + 0.73vw, 1.38rem);
+            font-size: clamp(0.82rem, 0.74rem + 0.48vw, 1.12rem) !important;
+            line-height: 1.25;
+        }
+
+        @media (min-width: 1024px) {
+            .detail-value-iban {
+                font-size: clamp(1.2rem, 1.05rem + 0.95vw, 1.8rem) !important;
+                line-height: 1.35;
+            }
         }
     </style>
 </head>
@@ -146,11 +154,10 @@
     <div class="mx-auto min-h-screen max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
         <header class="mb-6 flex items-center justify-between gap-4">
             <div class="flex min-w-0 flex-1 items-center gap-3">
-                <div x-show="hasChannelLogo() && !channelLogoFailed" x-cloak class="brand-logo flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full">
-                    <img :src="channelLogoFullUrl()" :alt="channelDisplayName()" class="h-full w-full object-cover"
-                         @error="channelLogoFailed = true">
+                <div x-show="hasChannelLogo()" x-cloak class="brand-logo flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full">
+                    <img :src="channelLogoFullUrl()" :alt="channelDisplayName()" class="h-full w-full object-cover">
                 </div>
-                <div x-show="!hasChannelLogo() || channelLogoFailed" x-cloak class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[rgba(99,91,255,0.12)] text-[var(--accent)]">
+                <div x-show="!hasChannelLogo()" x-cloak class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[rgba(99,91,255,0.12)] text-[var(--accent)]">
                     <span class="text-lg font-semibold" x-text="channelInitial()"></span>
                 </div>
                 <div class="surface min-w-0 flex-1 rounded-full px-5 py-3 shadow-soft sm:max-w-[18rem]">
@@ -254,13 +261,13 @@
                     <div class="mt-6 overflow-hidden rounded-[1.5rem] border border-[var(--line)] bg-white">
                         <div class="detail-row flex items-start justify-between gap-4 px-5 py-5 sm:px-6">
                             <div class="min-w-0">
-                                <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.bank"></p>
-                                <p class="detail-value-strong mt-2 font-semibold text-slate-950" x-text="requisites.bank_name"></p>
+                                <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.receiver"></p>
+                                <p class="detail-value-strong mt-2 font-semibold text-slate-950" x-text="requisites.receiver_name"></p>
                             </div>
-                            <button type="button" @click="copyField('bank', requisites.bank_name)"
+                            <button type="button" @click="copyField('receiver', requisites.receiver_name)"
                                     class="-mr-1 -mt-1 shrink-0 self-start rounded-full px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] transition sm:-mr-2 sm:-mt-2"
-                                    :class="copiedField === 'bank' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800'"
-                                    x-text="copiedField === 'bank' ? '✓ ' + copy.copied : copy.copyAction"></button>
+                                    :class="copiedField === 'receiver' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800'"
+                                    x-text="copiedField === 'receiver' ? '✓ ' + copy.copied : copy.copyAction"></button>
                         </div>
 
                         <div class="detail-row flex items-start justify-between gap-4 px-5 py-5 sm:px-6">
@@ -288,13 +295,13 @@
 
                         <div class="detail-row flex items-start justify-between gap-4 px-5 py-5 sm:px-6">
                             <div class="min-w-0">
-                                <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.receiver"></p>
-                                <p class="detail-value-strong mt-2 font-semibold text-slate-950" x-text="requisites.receiver_name"></p>
+                                <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400" x-text="copy.bank"></p>
+                                <p class="detail-value-strong mt-2 font-semibold text-slate-950" x-text="requisites.bank_name"></p>
                             </div>
-                            <button type="button" @click="copyField('receiver', requisites.receiver_name)"
+                            <button type="button" @click="copyField('bank', requisites.bank_name)"
                                     class="-mr-1 -mt-1 shrink-0 self-start rounded-full px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] transition sm:-mr-2 sm:-mt-2"
-                                    :class="copiedField === 'receiver' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800'"
-                                    x-text="copiedField === 'receiver' ? '✓ ' + copy.copied : copy.copyAction"></button>
+                                    :class="copiedField === 'bank' ? 'bg-[var(--success)] text-white' : 'bg-slate-950 text-white hover:bg-slate-800'"
+                                    x-text="copiedField === 'bank' ? '✓ ' + copy.copied : copy.copyAction"></button>
                         </div>
                     </div>
 
@@ -371,25 +378,15 @@
             : "http://127.0.0.1:8000";
 
         const localeMap = {
-            en: "en-GB",
             es: "es-ES",
             de: "de-DE",
-            fr: "fr-FR",
-            ro: "ro-RO",
-            it: "it-IT",
-            lt: "lt-LT",
-            pl: "pl-PL"
+            lt: "lt-LT"
         };
 
         const languageCatalog = [
-            { code: "en", label: "English" },
             { code: "es", label: "Español" },
             { code: "de", label: "Deutsch" },
-            { code: "fr", label: "Français" },
-            { code: "ro", label: "Română" },
-            { code: "it", label: "Italiano" },
-            { code: "lt", label: "Lietuvių" },
-            { code: "pl", label: "Polski" }
+            { code: "lt", label: "Lietuviu" }
         ];
 
         const translations = {
@@ -403,7 +400,7 @@
                 missingManagerTitle: "This payment page is unavailable",
                 missingManagerText: "This payment link cannot be used yet because no Telegram contact is configured.",
                 missingRequisitesTitle: "This payment page is unavailable",
-                missingRequisitesText: "There are currently no payment details configured.",
+                missingRequisitesText: "There are currently no payment details configured for this GEO.",
                 expiredTitle: "Time expired",
                 expiredText: "This payment link is no longer active. Request a new payment link.",
                 bankTransfer: "Bank transfer",
@@ -437,7 +434,7 @@
                 missingManagerTitle: "Esta pagina de pago no esta disponible",
                 missingManagerText: "Este enlace no se puede usar todavia porque no hay un contacto de Telegram configurado.",
                 missingRequisitesTitle: "Esta pagina de pago no esta disponible",
-                missingRequisitesText: "Ahora mismo no hay datos de pago disponibles.",
+                missingRequisitesText: "Ahora mismo no hay datos de pago disponibles para este GEO.",
                 expiredTitle: "Tiempo agotado",
                 expiredText: "Este enlace de pago ya no está activo. Solicita un nuevo enlace.",
                 bankTransfer: "Transferencia bancaria",
@@ -471,7 +468,7 @@
                 missingManagerTitle: "Questa pagina di pagamento non e disponibile",
                 missingManagerText: "Questo link non puo essere usato finche non viene configurato un contatto Telegram.",
                 missingRequisitesTitle: "Questa pagina di pagamento non e disponibile",
-                missingRequisitesText: "Al momento non ci sono coordinate di pagamento disponibili.",
+                missingRequisitesText: "Al momento non ci sono coordinate di pagamento disponibili per questo GEO.",
                 expiredTitle: "Tempo scaduto",
                 expiredText: "Questo link di pagamento non è più attivo. Richiedi un nuovo link.",
                 bankTransfer: "Bonifico bancario",
@@ -505,7 +502,7 @@
                 missingManagerTitle: "Diese Zahlungsseite ist nicht verfugbar",
                 missingManagerText: "Dieser Link kann noch nicht verwendet werden, weil kein Telegram-Kontakt eingerichtet ist.",
                 missingRequisitesTitle: "Diese Zahlungsseite ist nicht verfugbar",
-                missingRequisitesText: "Aktuell sind keine Zahlungsdaten verfugbar.",
+                missingRequisitesText: "Aktuell sind fur dieses GEO keine Zahlungsdaten verfugbar.",
                 expiredTitle: "Zeit abgelaufen",
                 expiredText: "Dieser Zahlungslink ist nicht mehr aktiv. Fordere einen neuen Zahlungslink an.",
                 bankTransfer: "Banküberweisung",
@@ -539,7 +536,7 @@
                 missingManagerTitle: "Sis mokejimo puslapis nepasiekiamas",
                 missingManagerText: "Sios nuorodos dar negalima naudoti, nes nera nustatyto Telegram kontakto.",
                 missingRequisitesTitle: "Sis mokejimo puslapis nepasiekiamas",
-                missingRequisitesText: "Siuo metu nera nustatytu mokejimo rekvizitu.",
+                missingRequisitesText: "Siam GEO siuo metu nera nustatytu mokejimo rekvizitu.",
                 expiredTitle: "Laikas baigesi",
                 expiredText: "Si mokejimo nuoroda nebeaktyvi. Paprasykite naujos nuorodos.",
                 bankTransfer: "Banko pavedimas",
@@ -573,7 +570,7 @@
                 missingManagerTitle: "Cette page de paiement n'est pas disponible",
                 missingManagerText: "Ce lien ne peut pas encore etre utilise car aucun contact Telegram n'est configure.",
                 missingRequisitesTitle: "Cette page de paiement n'est pas disponible",
-                missingRequisitesText: "Aucun detail de paiement n'est actuellement configure.",
+                missingRequisitesText: "Aucun detail de paiement n'est actuellement configure pour ce GEO.",
                 expiredTitle: "Temps expiré",
                 expiredText: "Ce lien de paiement n'est plus actif. Demandez un nouveau lien.",
                 bankTransfer: "Virement bancaire",
@@ -607,7 +604,7 @@
                 missingManagerTitle: "Această pagină de plată nu este disponibilă",
                 missingManagerText: "Acest link nu poate fi folosit încă deoarece nu este configurat niciun contact Telegram.",
                 missingRequisitesTitle: "Această pagină de plată nu este disponibilă",
-                missingRequisitesText: "Momentan nu există detalii de plată configurate.",
+                missingRequisitesText: "Momentan nu există detalii de plată configurate pentru acest GEO.",
                 expiredTitle: "Timp expirat",
                 expiredText: "Acest link de plată nu mai este activ. Cere un nou link.",
                 bankTransfer: "Transfer bancar",
@@ -630,40 +627,6 @@
                 paidAction: "Plătit",
                 managerButton: "Deschide Telegram",
                 managerUnavailable: "Linkul contactului Telegram nu este configurat încă."
-            },
-            pl: {
-                loading: "Ładowanie",
-                chooseLanguage: "Wybierz język",
-                defaultLanguage: "Domyślny:",
-                close: "Zamknij",
-                invalidTitle: "Ten link płatności jest niekompletny",
-                invalidText: "Poproś o prawidłowy link płatności z podaną kwotą.",
-                missingManagerTitle: "Ta strona płatności jest niedostępna",
-                missingManagerText: "Ten link nie może być jeszcze używany, ponieważ nie skonfigurowano kontaktu Telegram.",
-                missingRequisitesTitle: "Ta strona płatności jest niedostępna",
-                missingRequisitesText: "Obecnie nie skonfigurowano żadnych danych płatności.",
-                expiredTitle: "Czas minął",
-                expiredText: "Ten link płatności nie jest już aktywny. Poproś o nowy link.",
-                bankTransfer: "Przelew bankowy",
-                paymentPurpose: "Cel płatności",
-                paymentComment: "Ważne!",
-                timerLabel: "Dane zostaną zaktualizowane za",
-                timerLive: "Aktywny",
-                timerText: "Gdy timer się skończy, ten link stanie się nieaktywny. Poproś o nowy link.",
-                paymentDetails: "Dane do przelewu",
-                paymentDetailsTitle: "Wykonaj przelew używając poniższych danych",
-                paymentDetailsHint: "Skopiuj dane bankowe dokładnie tak, jak na tej stronie.",
-                bank: "Bank",
-                account: "IBAN",
-                receiver: "Odbiorca",
-                copyAction: "Kopiuj",
-                copied: "Skopiowano",
-                afterPayment: "Po płatności",
-                afterPaymentTitle: "Wyślij potwierdzenie po płatności",
-                afterPaymentHint: "Po wykonaniu przelewu wyślij potwierdzenie do kontaktu Telegram.",
-                paidAction: "Zapłacono",
-                managerButton: "Otwórz Telegram",
-                managerUnavailable: "Link do kontaktu Telegram nie jest jeszcze skonfigurowany."
             }
         };
 
@@ -672,7 +635,6 @@
                 loading: true,
                 showLanguages: false,
                 showAfterPayment: false,
-                channelLogoFailed: false,
                 currentLang: "es",
                 recommendedLanguage: "es",
                 mode: "invalid",
@@ -718,7 +680,6 @@
                     const context = await this.fetchContext();
                     this.mode = context.mode || "invalid";
                     this.invalidReason = String(context.invalid_reason || "");
-                    this.channelLogoFailed = false;
                     this.geo = context.geo || this.geo;
                     this.manager = context.manager || this.manager;
                     this.requisites = context.requisites || this.requisites;
