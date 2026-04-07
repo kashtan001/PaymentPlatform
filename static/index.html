@@ -378,15 +378,25 @@
             : "http://127.0.0.1:8000";
 
         const localeMap = {
+            en: "en-GB",
             es: "es-ES",
             de: "de-DE",
-            lt: "lt-LT"
+            lt: "lt-LT",
+            it: "it-IT",
+            fr: "fr-FR",
+            ro: "ro-RO",
+            pl: "pl-PL"
         };
 
         const languageCatalog = [
+            { code: "en", label: "English" },
             { code: "es", label: "Español" },
             { code: "de", label: "Deutsch" },
-            { code: "lt", label: "Lietuviu" }
+            { code: "fr", label: "Français" },
+            { code: "ro", label: "Română" },
+            { code: "it", label: "Italiano" },
+            { code: "lt", label: "Lietuvių" },
+            { code: "pl", label: "Polski" }
         ];
 
         const translations = {
@@ -635,8 +645,8 @@
                 loading: true,
                 showLanguages: false,
                 showAfterPayment: false,
-                currentLang: "es",
-                recommendedLanguage: "es",
+                currentLang: "en",
+                recommendedLanguage: "en",
                 mode: "invalid",
                 invalidReason: "",
                 visitor: {},
@@ -646,7 +656,7 @@
                 countdownTimerId: null,
                 timeLeftSeconds: 0,
                 availableLanguages: languageCatalog,
-                copy: translations.es,
+                copy: translations.en,
                 geo: {
                     geo_code: "ES",
                     geo_name: "Spain",
@@ -687,7 +697,7 @@
                     this.visitor = context.visitor || {};
                     this.visitToken = String(context.visit?.token || "");
                     this.availableLanguages = context.available_languages || languageCatalog;
-                    this.recommendedLanguage = this.resolveLanguageCode(context.recommended_language || this.geo.default_language || "es");
+                    this.recommendedLanguage = this.resolveLanguageCode(context.recommended_language || this.geo.default_language || "en");
 
                     const queryParams = new URLSearchParams(window.location.search);
                     const queryLang = queryParams.get("lang");
@@ -695,10 +705,10 @@
                     const hasPaymentLink = queryParams.has("link");
                     const storedLang = window.localStorage.getItem("dream-team-language");
                     const initialLanguage = hasPaymentLink
-                        ? this.resolveLanguageCode(queryLang || this.recommendedLanguage || "es")
+                        ? this.resolveLanguageCode(queryLang || this.recommendedLanguage || "en")
                         : (explicitGeo
-                            ? this.resolveLanguageCode(queryLang || this.recommendedLanguage || "es")
-                            : this.resolveLanguageCode(queryLang || storedLang || this.recommendedLanguage || "es"));
+                            ? this.resolveLanguageCode(queryLang || this.recommendedLanguage || "en")
+                            : this.resolveLanguageCode(queryLang || storedLang || this.recommendedLanguage || "en"));
                     this.applyLanguage(initialLanguage);
 
                     this.restartCountdown(Number(context.timer?.refresh_seconds || this.geo.refresh_seconds || 0));
@@ -720,7 +730,7 @@
                     } catch (error) {
                         return {
                             mode: "invalid",
-                            recommended_language: "es",
+                            recommended_language: "en",
                             available_languages: languageCatalog,
                             payment: this.payment,
                             geo: this.geo,
@@ -738,13 +748,24 @@
                 },
 
                 resolveLanguageCode(languageCode) {
-                    return languageCatalog.some((language) => language.code === languageCode) ? languageCode : "es";
+                    const code = String(languageCode || "").trim().toLowerCase();
+                    if (!code) {
+                        return "en";
+                    }
+                    if (translations[code]) {
+                        return code;
+                    }
+                    const allowed = this.availableLanguages || [];
+                    if (allowed.some((language) => language.code === code)) {
+                        return "en";
+                    }
+                    return "en";
                 },
 
                 applyLanguage(languageCode) {
                     const safe = this.resolveLanguageCode(languageCode);
                     this.currentLang = safe;
-                    this.copy = { ...translations.es, ...(translations[safe] || {}) };
+                    this.copy = { ...translations.en, ...(translations[safe] || {}) };
                     document.documentElement.lang = safe;
                     window.localStorage.setItem("dream-team-language", safe);
                 },
@@ -782,7 +803,7 @@
 
                 languageLabel(code) {
                     const found = this.availableLanguages.find((language) => language.code === code) || languageCatalog.find((language) => language.code === code);
-                    return found ? found.label : "Español";
+                    return found ? found.label : "English";
                 },
 
                 channelDisplayName() {
@@ -824,7 +845,7 @@
                     if (this.payment.amount === null || this.payment.amount === undefined) {
                         return "—";
                     }
-                    const locale = localeMap[this.currentLang] || "es-ES";
+                    const locale = localeMap[this.currentLang] || "en-GB";
                     return new Intl.NumberFormat(locale, {
                         style: "currency",
                         currency: this.payment.currency || "EUR",

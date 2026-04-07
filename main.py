@@ -4578,7 +4578,7 @@ async def landing_context(
             landing_comment = str(payment_link.get("landing_comment") or "")
             payment_comment = str(payment_link.get("payment_comment") or "")
             recommended_language = resolve_recommended_language(
-                explicit_language=payment_link.get("forced_language"),
+                explicit_language=lang or payment_link.get("forced_language"),
                 browser_language=browser_language,
                 country_code=visitor.get("country_code"),
                 geo_default_language=profile.get("default_language"),
